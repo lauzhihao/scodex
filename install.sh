@@ -25,6 +25,41 @@ need_cmd curl
 need_cmd python3
 need_cmd codex
 
+REAL_CODEX_BIN="$(command -v codex)"
+
+append_shell_block() {
+  local rc_file="$1"
+  local begin_marker="# >>> auto-codex >>>"
+  local end_marker="# <<< auto-codex <<<"
+
+  mkdir -p "$(dirname "${rc_file}")"
+  touch "${rc_file}"
+
+  if grep -Fq "${begin_marker}" "${rc_file}"; then
+    return
+  fi
+
+  {
+    printf '\n%s\n' "${begin_marker}"
+    printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+    printf 'alias codex="auto-codex"\n'
+    printf "alias codex-original='%s'\n" "${REAL_CODEX_BIN}"
+    printf '%s\n' "${end_marker}"
+  } >> "${rc_file}"
+}
+
+select_rc_files() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-}")"
+
+  if [[ -f "${HOME}/.zshrc" || "${shell_name}" == "zsh" ]]; then
+    printf '%s\n' "${HOME}/.zshrc"
+  fi
+  if [[ -f "${HOME}/.bashrc" || "${shell_name}" == "bash" ]]; then
+    printf '%s\n' "${HOME}/.bashrc"
+  fi
+}
+
 mkdir -p "${INSTALL_BIN}" "${INSTALL_HOME}"
 
 tmp_script="$(mktemp "${TMPDIR:-/tmp}/auto-codex.XXXXXX.py")"
@@ -43,14 +78,23 @@ EOF
 
 chmod 0755 "${WRAPPER_PATH}"
 
-case ":${PATH}:" in
-  *":${HOME}/.local/bin:"*) ;;
-  *)
-    echo "Installed to ${WRAPPER_PATH}"
-    echo "Add ${HOME}/.local/bin to PATH before using auto-codex."
-    exit 0
-    ;;
-esac
+while IFS= read -r rc_file; do
+  [[ -n "${rc_file}" ]] || continue
+  append_shell_block "${rc_file}"
+done < <(select_rc_files)
+
+if [[ -f "${HOME}/.codex/auth.json" ]]; then
+  if "${WRAPPER_PATH}" import-known >/dev/null; then
+    echo "Imported ${HOME}/.codex/auth.json into auto-codex."
+  else
+    echo "Install succeeded, but importing ${HOME}/.codex/auth.json failed." >&2
+  fi
+else
+  echo "No ${HOME}/.codex/auth.json found; skipped import."
+fi
 
 echo "Installed to ${WRAPPER_PATH}"
-echo "Run: auto-codex list"
+echo "Added shell aliases in ~/.zshrc and/or ~/.bashrc:"
+echo "  codex -> auto-codex"
+echo "  codex-original -> ${REAL_CODEX_BIN}"
+echo "Open a new shell or source your shell rc file to activate the codex alias."

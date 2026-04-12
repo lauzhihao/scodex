@@ -14,8 +14,10 @@ The installer:
 
 - downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
 - creates `~/.local/bin/auto-codex`
+- imports `~/.codex/auth.json` into `auto-codex` state when it exists
+- adds `alias codex="auto-codex"` to `~/.zshrc` and/or `~/.bashrc`
+- adds `alias codex-original="..."` as a direct escape hatch to the real Codex CLI
 - keeps all runtime state on the local machine
-- only auto-imports `~/.codex/auth.json`
 
 ## Requirements
 
@@ -27,10 +29,10 @@ The installer:
 ## Usage
 
 ```bash
+codex
+codex resume --last
 auto-codex list
-auto-codex refresh
-auto-codex auto
-auto-codex
+codex-original --help
 ```
 
 ## Publish Checklist

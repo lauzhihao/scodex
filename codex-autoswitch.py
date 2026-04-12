@@ -21,6 +21,7 @@ STATE_VERSION = 1
 DEFAULT_USAGE_BASE_URL = "https://chatgpt.com/backend-api"
 DEFAULT_STATE_BASENAME = "auto-codex"
 LEGACY_STATE_BASENAME = "codex-autoswitch"
+KNOWN_COMMANDS = {"launch", "auto", "login", "list", "refresh", "import-auth", "import-known"}
 
 
 def main() -> int:
@@ -46,19 +47,37 @@ def main() -> int:
         return cmd_import_auth(args, state_dir, state)
     if args.command == "import-known":
         return cmd_import_known(args, state_dir, state)
+    if args.command == "passthrough":
+        return cmd_passthrough(args, state_dir, state)
     parser.print_help()
     return 1
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
-    if not argv:
-        return ["launch"]
-    if argv[0] in {"-h", "--help"}:
-        return argv
-    known_commands = {"launch", "auto", "login", "list", "refresh", "import-auth", "import-known"}
-    if argv[0] in known_commands:
-        return argv
-    return ["launch", *argv]
+    root: list[str] = []
+    idx = 0
+    while idx < len(argv):
+        token = argv[idx]
+        if token in {"-h", "--help"}:
+            return [*root, token, *argv[idx + 1 :]]
+        if token == "--state-dir":
+            if idx + 1 >= len(argv):
+                return [*root, token]
+            root.extend(argv[idx : idx + 2])
+            idx += 2
+            continue
+        if token.startswith("--state-dir="):
+            root.append(token)
+            idx += 1
+            continue
+        break
+
+    remainder = argv[idx:]
+    if not remainder:
+        return [*root, "launch"]
+    if remainder[0] in KNOWN_COMMANDS:
+        return [*root, *remainder]
+    return [*root, "passthrough", *remainder]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list", help="List known accounts and cached usage.")
     subparsers.add_parser("refresh", help="Refresh usage for all known accounts.")
+    subparsers.add_parser("passthrough", help=argparse.SUPPRESS)
 
     import_auth = subparsers.add_parser(
         "import-auth",
@@ -471,6 +491,16 @@ def cmd_auto(args: argparse.Namespace, state_dir: Path, state: dict) -> int:
     return 0
 
 
+def cmd_passthrough(args: argparse.Namespace, state_dir: Path, state: dict) -> int:
+    dispatch_args = argparse.Namespace(no_import_known=False, no_login=False)
+    account, usage = ensure_best_account(dispatch_args, state_dir, state, perform_switch=True)
+    if account is None:
+        print("No usable account found.")
+        return 1
+    print_selection(account, usage, prefix="Switched to")
+    return run_codex_passthrough(args.extra_codex_args)
+
+
 def ensure_best_account(
     args: argparse.Namespace,
     state_dir: Path,
@@ -758,7 +788,7 @@ def identity_matches(account: dict, live: dict | None) -> bool:
 def print_selection(account: dict, usage: dict, prefix: str) -> None:
     weekly = format_percent(usage.get("weekly_remaining_percent"))
     five_hour = format_percent(usage.get("five_hour_remaining_percent"))
-    print(f"{prefix} {account['email']} [weekly={weekly}, 5h={five_hour}]")
+    print(f"{prefix} {account['email']} [weekly={weekly}, 5h={five_hour}]", flush=True)
 
 
 def format_percent(value) -> str:
@@ -791,6 +821,11 @@ def launch_codex(extra_args: list[str], *, resume: bool) -> int:
     else:
         print("Starting a fresh Codex session.")
     return subprocess.run(fresh_cmd).returncode
+
+
+def run_codex_passthrough(extra_args: list[str]) -> int:
+    codex_bin = resolve_codex_bin()
+    return subprocess.run([codex_bin, *extra_args]).returncode
 
 
 def build_codex_launch_command(codex_bin: str, extra_args: list[str], *, resume: bool) -> list[str]:
