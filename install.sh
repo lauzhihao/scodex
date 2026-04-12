@@ -133,28 +133,6 @@ show_requirements() {
   fi
 }
 
-confirm_install() {
-  local reply
-  if [[ "${AUTO_CODEX_YES:-}" == "1" || "${AUTO_CODEX_YES:-}" == "true" ]]; then
-    return
-  fi
-  if ! tty -s >/dev/null 2>&1; then
-    echo "Install requires confirmation. Re-run with AUTO_CODEX_YES=1 for non-interactive use." >&2
-    exit 1
-  fi
-  printf 'Proceed with auto-codex install? [y/N] ' > /dev/tty
-  read -r reply < /dev/tty || exit 1
-  case "${reply}" in
-    y|Y|yes|YES)
-      return
-      ;;
-    *)
-      echo "Install cancelled."
-      exit 1
-      ;;
-  esac
-}
-
 REAL_CODEX_BIN=""
 
 render_shell_block() {
@@ -229,7 +207,6 @@ select_rc_files() {
 show_requirements
 REAL_CODEX_BIN="$(command -v codex)"
 show_plan
-confirm_install
 
 mkdir -p "${INSTALL_BIN}" "${INSTALL_HOME}"
 

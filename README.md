@@ -10,8 +10,7 @@ The repository is intentionally code-only. It does not contain any account pool 
 curl -fsSL https://raw.githubusercontent.com/lauzhihao/auto-codex/main/install.sh | bash
 ```
 
-The installer prints a step-by-step execution plan, waits for a `Y/N` confirmation, and then runs.
-For non-interactive installs, set `AUTO_CODEX_YES=1`.
+The installer prints a step-by-step execution plan and then runs immediately.
 If required dependencies are missing, the installer prints environment details and suggested install commands, then exits without changing the machine.
 
 The installer:
