@@ -1,0 +1,41 @@
+# auto-codex
+
+`auto-codex` picks the Codex account with the highest remaining quota, switches `~/.codex/auth.json`, and then launches Codex.
+
+The repository is intentionally code-only. It does not contain any account pool data, cached usage, local config, or virtualenv files.
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lauzhihao/auto-codex/main/install.sh | bash
+```
+
+The installer:
+
+- downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
+- creates `~/.local/bin/auto-codex`
+- keeps all runtime state on the local machine
+
+## Requirements
+
+- `bash`
+- `curl`
+- `python3`
+- `codex`
+
+## Usage
+
+```bash
+auto-codex list
+auto-codex refresh
+auto-codex auto
+auto-codex
+```
+
+## Publish Checklist
+
+Before the first push:
+
+1. Run `rg -n 'access_token|refresh_token|id_token|OPENAI_API_KEY|account_id|@qq\\.com|/Users/ncds|/Users/liuzhihao' .`
+2. Confirm `git status --short` only shows code and docs.
+3. Review `git diff --cached` before pushing.
