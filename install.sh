@@ -19,12 +19,85 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+detect_platform() {
+  local os arch
+  os="$(uname -s 2>/dev/null || echo unknown)"
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  printf '%s/%s' "${os}" "${arch}"
+}
+
+show_runtime_environment() {
+  local shell_name
+  shell_name="$(basename "${SHELL:-unknown}")"
+  cat <<EOF
+Runtime environment:
+  platform: $(detect_platform)
+  shell: ${shell_name}
+  home: ${HOME}
+  raw base: ${RAW_BASE}
+EOF
+}
+
+print_install_hint() {
+  local cmd="$1"
+  local os
+  os="$(uname -s 2>/dev/null || echo unknown)"
+
+  case "${cmd}" in
+    bash)
+      case "${os}" in
+        Darwin)
+          echo "    install hint: bash is expected to exist on macOS. Verify /bin/bash is available."
+          ;;
+        Linux)
+          echo "    install hint: ubuntu/debian: sudo apt-get update && sudo apt-get install -y bash"
+          echo "    install hint: centos/rhel: sudo yum install -y bash"
+          ;;
+      esac
+      ;;
+    curl)
+      case "${os}" in
+        Darwin)
+          echo "    install hint: curl is expected to exist on macOS. Verify /usr/bin/curl is available."
+          ;;
+        Linux)
+          echo "    install hint: ubuntu/debian: sudo apt-get update && sudo apt-get install -y curl"
+          echo "    install hint: centos/rhel: sudo yum install -y curl"
+          ;;
+      esac
+      ;;
+    python3)
+      case "${os}" in
+        Darwin)
+          echo "    install hint: brew install python"
+          ;;
+        Linux)
+          echo "    install hint: ubuntu/debian: sudo apt-get update && sudo apt-get install -y python3"
+          echo "    install hint: centos/rhel: sudo yum install -y python3"
+          ;;
+      esac
+      ;;
+    codex)
+      case "${os}" in
+        Darwin)
+          echo "    install hint: install Node.js first, then npm install -g @openai/codex"
+          echo "    install hint: Homebrew Node.js: brew install node"
+          ;;
+        Linux)
+          echo "    install hint: install Node.js first, then npm install -g @openai/codex"
+          echo "    install hint: ubuntu/debian Node.js example: sudo apt-get update && sudo apt-get install -y nodejs npm"
+          ;;
+      esac
+      ;;
+  esac
+}
+
 show_plan() {
   cat <<EOF
 auto-codex install plan
 
 The script will perform these actions:
-1. Check required commands: bash, curl, python3, codex.
+1. Check runtime environment and required commands: bash, curl, python3, codex.
 2. Download:
    curl -fsSL ${SCRIPT_URL}
 3. Install files:
@@ -43,17 +116,19 @@ EOF
 show_requirements() {
   local missing=0
   local cmd
+  show_runtime_environment
   echo "Dependency check:"
   for cmd in bash curl python3 codex; do
     if need_cmd "${cmd}"; then
       printf '  [ok] %s -> %s\n' "${cmd}" "$(command -v "${cmd}")"
     else
       printf '  [missing] %s\n' "${cmd}" >&2
+      print_install_hint "${cmd}" >&2
       missing=1
     fi
   done
   if [[ "${missing}" -ne 0 ]]; then
-    echo "Install aborted because required commands are missing." >&2
+    echo "Install aborted because required commands are missing. Install them first, then re-run this script." >&2
     exit 1
   fi
 }
