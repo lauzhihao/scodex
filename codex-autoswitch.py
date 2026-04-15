@@ -513,7 +513,7 @@ def render_account_table(accounts: list[dict], usage_cache: dict, active: dict |
         usage = usage_cache.get(account["id"], {})
         plan = account.get("plan") or usage.get("plan") or "Unknown"
         rows.append([
-            "*" if identity_matches(account, active) else "",
+            active_account_marker() if identity_matches(account, active) else "",
             account["email"],
             plan,
             format_percent(usage.get("five_hour_remaining_percent")),
@@ -525,10 +525,20 @@ def render_account_table(accounts: list[dict], usage_cache: dict, active: dict |
 
 def format_account_status(usage: dict) -> str:
     if usage.get("needs_relogin"):
-        return "relogin"
+        return "RELOGIN"
     if usage.get("last_sync_error"):
-        return "error"
-    return "ok"
+        return "ERROR"
+    return "OK"
+
+
+def active_account_marker() -> str:
+    marker = "✓"
+    encoding = sys.stdout.encoding or ""
+    try:
+        marker.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return "Y"
+    return marker
 
 
 def render_ascii_table(headers: list[str], rows: list[list[str]]) -> str:
