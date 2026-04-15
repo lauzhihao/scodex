@@ -1,5 +1,8 @@
+import argparse
 import base64
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -183,6 +186,89 @@ class CodexAutoswitchTest(unittest.TestCase):
             self.assertGreaterEqual(max_in_flight, 2)
             self.assertEqual(state["usage_cache"]["a"]["five_hour_remaining_percent"], 90)
             self.assertEqual(state["usage_cache"]["b"]["five_hour_remaining_percent"], 70)
+
+    def test_cmd_list_refreshes_before_printing(self) -> None:
+        state = {
+            "version": 1,
+            "accounts": [
+                {"id": "a", "email": "a@example.com", "updated_at": 1, "plan": "Plus"},
+            ],
+            "usage_cache": {
+                "a": {
+                    "weekly_remaining_percent": 10,
+                    "five_hour_remaining_percent": 20,
+                }
+            },
+        }
+        calls: list[str] = []
+        original_refresh = autoswitch.refresh_all_accounts
+        original_save = autoswitch.save_state
+        original_identity = autoswitch.read_live_identity
+
+        def fake_refresh(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            calls.append("refresh")
+            current_state["usage_cache"]["a"] = {
+                "weekly_remaining_percent": 80,
+                "five_hour_remaining_percent": 90,
+            }
+
+        def fake_save(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            _ = current_state
+            calls.append("save")
+
+        autoswitch.refresh_all_accounts = fake_refresh
+        autoswitch.save_state = fake_save
+        autoswitch.read_live_identity = lambda: None
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                rc = autoswitch.cmd_list(argparse.Namespace(), Path("/tmp/state"), state)
+        finally:
+            autoswitch.refresh_all_accounts = original_refresh
+            autoswitch.save_state = original_save
+            autoswitch.read_live_identity = original_identity
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["refresh", "save"])
+        self.assertIn("weekly=80% 5h=90%", output.getvalue())
+
+    def test_cmd_refresh_prints_latest_usage_after_refresh(self) -> None:
+        state = {
+            "version": 1,
+            "accounts": [
+                {"id": "a", "email": "a@example.com", "updated_at": 1, "plan": "Plus"},
+            ],
+            "usage_cache": {},
+        }
+        original_refresh = autoswitch.refresh_all_accounts
+        original_save = autoswitch.save_state
+        original_identity = autoswitch.read_live_identity
+
+        def fake_refresh(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            current_state["usage_cache"]["a"] = {
+                "weekly_remaining_percent": 70,
+                "five_hour_remaining_percent": 85,
+            }
+
+        autoswitch.refresh_all_accounts = fake_refresh
+        autoswitch.save_state = lambda state_dir, current_state: None
+        autoswitch.read_live_identity = lambda: None
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                rc = autoswitch.cmd_refresh(argparse.Namespace(), Path("/tmp/state"), state)
+        finally:
+            autoswitch.refresh_all_accounts = original_refresh
+            autoswitch.save_state = original_save
+            autoswitch.read_live_identity = original_identity
+
+        self.assertEqual(rc, 0)
+        rendered = output.getvalue()
+        self.assertIn("Refreshed 1 account(s).", rendered)
+        self.assertIn("weekly=70% 5h=85%", rendered)
 
 
 if __name__ == "__main__":

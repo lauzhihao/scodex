@@ -46,8 +46,8 @@ Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept onl
 | `scodex launch` | Explicit form of the default behavior |
 | `scodex auto` | Refresh usage, pick the best account, and switch without launching Codex |
 | `scodex login` | Add one account via `codex login --device-auth` |
-| `scodex list` | Show known accounts and cached usage |
-| `scodex refresh` | Refresh live usage for all known accounts |
+| `scodex list` | Refresh live usage, then show the latest account quotas |
+| `scodex refresh` | Refresh live usage for all known accounts and print the latest results |
 | `scodex import-auth <path>` | Import an `auth.json` file or a home directory containing `auth.json` |
 | `scodex import-known` | Import `~/.codex/auth.json`; optionally import AI Accounts Hub managed homes |
 | `scodex update` | Update `scodex` from its configured install source |
@@ -95,8 +95,7 @@ scodex login [--switch]
 scodex list
 ```
 
-- shows known accounts and the locally cached usage snapshot
-- does not refresh live usage by itself
+- refreshes live usage first, then prints the latest account quota snapshot
 
 ### `refresh`
 
@@ -105,6 +104,7 @@ scodex refresh
 ```
 
 - calls the live usage API for all known accounts
+- prints the refreshed account list immediately after the API calls finish
 - refresh uses up to 8 parallel workers by default
 - override worker count with `AUTO_CODEX_REFRESH_WORKERS`
 

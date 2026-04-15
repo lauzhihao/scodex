@@ -46,8 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 | `scodex launch` | 默认行为的显式写法 |
 | `scodex auto` | 刷新额度并切换最佳账号，但不启动 Codex |
 | `scodex login` | 通过 `codex login --device-auth` 添加一个账号 |
-| `scodex list` | 查看已知账号和本地缓存的额度信息 |
-| `scodex refresh` | 刷新所有已知账号的实时额度 |
+| `scodex list` | 先刷新实时额度，再显示最新账号额度 |
+| `scodex refresh` | 刷新所有已知账号的实时额度，并直接打印最新结果 |
 | `scodex import-auth <path>` | 导入一个 `auth.json` 文件，或包含 `auth.json` 的目录 |
 | `scodex import-known` | 导入 `~/.codex/auth.json`；可选导入 AI Accounts Hub 管理的账号 |
 | `scodex update` | 从配置的安装源更新 `scodex` |
@@ -95,8 +95,7 @@ scodex login [--switch]
 scodex list
 ```
 
-- 显示已知账号以及本地缓存中的额度快照
-- 不会主动调用实时额度接口
+- 会先调用实时额度接口，再打印最新的账号额度快照
 
 ### `refresh`
 
@@ -105,6 +104,7 @@ scodex refresh
 ```
 
 - 会对所有已知账号调用实时额度接口
+- 刷新完成后会立刻打印最新账号列表
 - 默认最多使用 8 个并行 worker
 - 可以通过 `AUTO_CODEX_REFRESH_WORKERS` 覆盖并发数
 

@@ -150,8 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Switch to the new account after login succeeds.",
     )
 
-    subparsers.add_parser("list", help="List known accounts and cached usage.")
-    subparsers.add_parser("refresh", help="Refresh usage for all known accounts.")
+    subparsers.add_parser("list", help="Refresh usage, then list known accounts.")
+    subparsers.add_parser("refresh", help="Refresh usage for all known accounts and print the latest results.")
     update = subparsers.add_parser("update", help="Update scodex from its install source.")
     update.add_argument(
         "--yes",
@@ -485,21 +485,22 @@ def cmd_launch(args: argparse.Namespace, state_dir: Path, state: dict) -> int:
 
 
 def cmd_refresh(_: argparse.Namespace, state_dir: Path, state: dict) -> int:
+    return refresh_and_print_accounts(state_dir, state, announce_refresh=True)
+
+
+def cmd_list(_: argparse.Namespace, state_dir: Path, state: dict) -> int:
+    return refresh_and_print_accounts(state_dir, state, announce_refresh=False)
+
+
+def refresh_and_print_accounts(state_dir: Path, state: dict, *, announce_refresh: bool) -> int:
     if not state["accounts"]:
         print("No accounts.")
         return 1
     refresh_all_accounts(state_dir, state)
     save_state(state_dir, state)
-    print(f"Refreshed {len(state['accounts'])} account(s).")
-    return 0
-
-
-def cmd_list(_: argparse.Namespace, state_dir: Path, state: dict) -> int:
-    _ = state_dir
+    if announce_refresh:
+        print(f"Refreshed {len(state['accounts'])} account(s).")
     accounts = state["accounts"]
-    if not accounts:
-        print("No accounts.")
-        return 1
     active = read_live_identity()
     for account in sorted(accounts, key=lambda item: item["email"]):
         usage = state["usage_cache"].get(account["id"], {})
