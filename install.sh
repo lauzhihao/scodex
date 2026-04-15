@@ -7,7 +7,7 @@ INSTALL_HOME="${HOME}/.local/share/auto-codex"
 SCRIPT_URL="${RAW_BASE}/codex-autoswitch.py"
 SCRIPT_PATH="${INSTALL_HOME}/codex-autoswitch.py"
 WRAPPER_PATH="${INSTALL_BIN}/scodex"
-LEGACY_WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
+COMPAT_WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
 BEGIN_MARKER="# >>> auto-codex >>>"
 END_MARKER="# <<< auto-codex <<<"
 
@@ -104,6 +104,7 @@ The script will perform these actions:
 3. Install files:
    - ${SCRIPT_PATH}
    - ${WRAPPER_PATH}
+   - ${COMPAT_WRAPPER_PATH} (compatibility command)
 4. Update managed shell config blocks in:
 $(select_rc_files | sed 's/^/   - /')
 5. If ${HOME}/.codex/auth.json exists:
@@ -225,21 +226,29 @@ export AUTO_CODEX_RAW_BASE="__AUTO_CODEX_RAW_BASE__"
 exec python3 "${AUTO_CODEX_HOME}/codex-autoswitch.py" "$@"
 EOF
 
-python3 - "${WRAPPER_PATH}" "${RAW_BASE}" <<'PY'
+cat > "${COMPAT_WRAPPER_PATH}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export AUTO_CODEX_HOME="${HOME}/.local/share/auto-codex"
+export AUTO_CODEX_PROG="auto-codex"
+export AUTO_CODEX_RAW_BASE="__AUTO_CODEX_RAW_BASE__"
+exec python3 "${AUTO_CODEX_HOME}/codex-autoswitch.py" "$@"
+EOF
+
+python3 - "${WRAPPER_PATH}" "${COMPAT_WRAPPER_PATH}" "${RAW_BASE}" <<'PY'
 from pathlib import Path
 import sys
 
 wrapper_path = Path(sys.argv[1])
-raw_base = sys.argv[2]
-text = wrapper_path.read_text(encoding="utf-8")
-wrapper_path.write_text(text.replace("__AUTO_CODEX_RAW_BASE__", raw_base), encoding="utf-8")
+compat_wrapper_path = Path(sys.argv[2])
+raw_base = sys.argv[3]
+for path in (wrapper_path, compat_wrapper_path):
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("__AUTO_CODEX_RAW_BASE__", raw_base), encoding="utf-8")
 PY
 
 chmod 0755 "${WRAPPER_PATH}"
-
-if [[ -f "${LEGACY_WRAPPER_PATH}" && "${LEGACY_WRAPPER_PATH}" != "${WRAPPER_PATH}" ]]; then
-  rm -f "${LEGACY_WRAPPER_PATH}"
-fi
+chmod 0755 "${COMPAT_WRAPPER_PATH}"
 
 while IFS= read -r rc_file; do
   [[ -n "${rc_file}" ]] || continue
@@ -262,6 +271,8 @@ else
 fi
 
 echo "Installed to ${WRAPPER_PATH}"
+echo "Installed compatibility command to ${COMPAT_WRAPPER_PATH}"
 echo "Added shell aliases in ~/.zshrc and/or ~/.bashrc:"
 echo "  scodex-original -> ${REAL_CODEX_BIN}"
-echo "Use \`scodex\` to start this wrapper. Open a new shell or source your shell rc file if needed."
+echo "Use \`scodex\` as the primary command. \`auto-codex\` remains available for compatibility."
+echo "The installer does not alias \`codex\`; use \`scodex-original\` for the underlying Codex CLI."
