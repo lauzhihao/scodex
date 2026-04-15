@@ -1,6 +1,6 @@
 # auto-codex
 
-`auto-codex` picks the Codex account with the highest remaining quota, switches `~/.codex/auth.json`, and then launches Codex.
+`auto-codex` picks the Codex account with the best remaining quota for immediate use, switches `~/.codex/auth.json`, and then launches Codex.
 
 The repository is intentionally code-only. It does not contain any account pool data, cached usage, local config, or virtualenv files.
 
@@ -18,6 +18,7 @@ The installer:
 - downloads `codex-autoswitch.py` into `~/.local/share/auto-codex/`
 - creates `~/.local/bin/scodex`
 - imports `~/.codex/auth.json` into `auto-codex` state when it exists
+- also imports AI Accounts Hub managed Codex homes when present
 - refreshes usage cache after import when the usage API is reachable
 - adds or updates a managed `alias scodex-original="..."` block in `~/.zshrc` and/or `~/.bashrc`
 - keeps all runtime state on the local machine
@@ -42,6 +43,12 @@ scodex-original --help
 
 `scodex update` updates `auto-codex` itself from the configured install source.
 Use `scodex-original` if you need the underlying Codex CLI directly.
+
+## Notes
+
+- Account refresh runs against the live usage API, not only the local cache.
+- Refresh uses up to 8 parallel workers by default. Override with `AUTO_CODEX_REFRESH_WORKERS`.
+- Account selection prefers higher `5h` remaining quota before weekly quota so the chosen account is more likely to be immediately usable.
 
 ## Publish Checklist
 

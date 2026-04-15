@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import shutil
@@ -102,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument(
         "--no-import-known",
         action="store_true",
-        help="Do not auto-import current ~/.codex/auth.json.",
+        help="Do not auto-import current ~/.codex or AI Accounts Hub managed homes.",
     )
     launch.add_argument(
         "--no-login",
@@ -129,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument(
         "--no-import-known",
         action="store_true",
-        help="Do not auto-import current ~/.codex/auth.json.",
+        help="Do not auto-import current ~/.codex or AI Accounts Hub managed homes.",
     )
     auto.add_argument(
         "--no-login",
@@ -167,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "import-known",
-        help="Import ~/.codex/auth.json.",
+        help="Import ~/.codex/auth.json and common AI Accounts Hub managed homes.",
     )
 
     return parser
@@ -387,6 +388,18 @@ def import_known_sources(state_dir: Path, state: dict) -> list[dict]:
             return
 
     maybe_import(Path.home() / ".codex" / "auth.json")
+
+    home = Path.home()
+    candidate_roots = [
+        home / "Library" / "Application Support" / "com.murong.ai-accounts-hub" / "codex" / "managed-codex-homes",
+        home / ".local" / "share" / "com.murong.ai-accounts-hub" / "codex" / "managed-codex-homes",
+    ]
+    for root in candidate_roots:
+        if not root.exists():
+            continue
+        for auth_path in sorted(root.glob("*/auth.json")):
+            maybe_import(auth_path)
+
     return dedupe_imported(imported)
 
 
@@ -574,9 +587,33 @@ def ensure_best_account(
 
 
 def refresh_all_accounts(state_dir: Path, state: dict) -> None:
-    for account in state["accounts"]:
-        previous = state["usage_cache"].get(account["id"])
-        state["usage_cache"][account["id"]] = fetch_usage_for_account(account, previous)
+    accounts = list(state["accounts"])
+    if not accounts:
+        save_state(state_dir, state)
+        return
+
+    max_workers = resolve_refresh_workers(len(accounts))
+    if max_workers == 1:
+        for account in accounts:
+            previous = state["usage_cache"].get(account["id"])
+            state["usage_cache"][account["id"]] = fetch_usage_for_account(account, previous)
+        save_state(state_dir, state)
+        return
+
+    previous_usage = {
+        account["id"]: state["usage_cache"].get(account["id"])
+        for account in accounts
+    }
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        refreshed = executor.map(
+            lambda account: (
+                account["id"],
+                fetch_usage_for_account(account, previous_usage.get(account["id"])),
+            ),
+            accounts,
+        )
+        for account_id, usage in refreshed:
+            state["usage_cache"][account_id] = usage
     save_state(state_dir, state)
 
 
@@ -585,6 +622,16 @@ def refresh_account_usage(state_dir: Path, state: dict, account: dict) -> dict:
     state["usage_cache"][account["id"]] = usage
     save_state(state_dir, state)
     return usage
+
+
+def resolve_refresh_workers(account_count: int) -> int:
+    override = os.environ.get("AUTO_CODEX_REFRESH_WORKERS")
+    if override:
+        try:
+            return max(1, min(int(override), account_count))
+        except ValueError:
+            pass
+    return max(1, min(account_count, 8))
 
 
 def fetch_usage_for_account(account: dict, previous: dict | None = None) -> dict:
@@ -788,12 +835,16 @@ def build_score(account: dict, usage: dict) -> tuple:
     credits = usage.get("credits_balance")
     freshness = int(usage.get("last_synced_at") or 0)
     updated = int(account.get("updated_at") or 0)
+
+    def quota_score(value) -> tuple[int, int]:
+        if value is None:
+            return (0, -1)
+        return (1, int(value))
+
     return (
-        1 if weekly is not None else 0,
-        int(weekly or -1),
-        1 if five_hour is not None else 0,
-        int(five_hour or -1),
-        float(credits or -1),
+        *quota_score(five_hour),
+        *quota_score(weekly),
+        -1.0 if credits is None else float(credits),
         freshness,
         updated,
     )
