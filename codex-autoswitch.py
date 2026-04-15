@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import json
 import os
 import shutil
@@ -518,9 +519,10 @@ def render_account_table(accounts: list[dict], usage_cache: dict, active: dict |
             plan,
             format_percent(usage.get("five_hour_remaining_percent")),
             format_percent(usage.get("weekly_remaining_percent")),
+            format_reset_on(usage.get("weekly_refresh_at")),
             format_account_status(usage),
         ])
-    return render_ascii_table(["Active", "Email", "Plan", "5h", "Weekly", "Status"], rows)
+    return render_ascii_table(["Active", "Email", "Plan", "5h", "Weekly", "ResetOn", "Status"], rows)
 
 
 def format_account_status(usage: dict) -> str:
@@ -942,6 +944,28 @@ def format_percent(value) -> str:
     if value is None:
         return "N/A"
     return f"{int(value)}%"
+
+
+def format_reset_on(value) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value)).astimezone().strftime("%m-%d %H:%M")
+
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "n/a"}:
+        return "N/A"
+    if text.isdigit():
+        return datetime.fromtimestamp(float(text)).astimezone().strftime("%m-%d %H:%M")
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return "N/A"
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.strftime("%m-%d %H:%M")
 
 
 def detect_local_ip() -> str:
