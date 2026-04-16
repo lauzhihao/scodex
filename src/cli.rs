@@ -28,6 +28,8 @@ pub enum Command {
     Auto(AutoArgs),
     Add(AddArgs),
     Login(LoginArgs),
+    #[command(visible_alias = "sync")]
+    Deploy(DeployArgs),
     Use(UseArgs),
     List,
     Refresh,
@@ -75,6 +77,14 @@ pub struct LoginArgs {
 pub struct AddArgs {
     #[arg(long)]
     pub switch: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DeployArgs {
+    #[arg(short = 'i', value_name = "IDENTITY_FILE")]
+    pub identity_file: Option<PathBuf>,
+
+    pub target: String,
 }
 
 #[derive(Debug, Args)]
@@ -212,6 +222,10 @@ pub fn run(cli: Cli) -> Result<i32> {
             storage::save_state(&state_dir, &state)?;
             0
         }
+        Command::Deploy(args) => {
+            adapter.deploy_live_auth(&args.target, args.identity_file.as_deref())?;
+            0
+        }
         Command::List => {
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
@@ -317,6 +331,7 @@ enum HelpTopic {
     Auto,
     Add,
     Login,
+    Deploy,
     Use,
     List,
     Refresh,
@@ -362,6 +377,7 @@ fn command_help_topic(name: &str) -> Option<HelpTopic> {
         "auto" => Some(HelpTopic::Auto),
         "add" => Some(HelpTopic::Add),
         "login" => Some(HelpTopic::Login),
+        "deploy" | "sync" => Some(HelpTopic::Deploy),
         "use" => Some(HelpTopic::Use),
         "list" => Some(HelpTopic::List),
         "refresh" => Some(HelpTopic::Refresh),
@@ -409,6 +425,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  login        Add one account through device auth"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  deploy       Copy the current auth.json to a remote machine [alias: sync]"
             )
             .unwrap();
             writeln!(
@@ -529,6 +550,26 @@ fn render_help_en(topic: HelpTopic) -> String {
             .unwrap();
             writeln!(&mut out, "  -h, --help    Print help").unwrap();
         }
+        HelpTopic::Deploy => {
+            writeln!(&mut out, "Usage:").unwrap();
+            writeln!(&mut out, "  scodex deploy [OPTIONS] <TARGET>").unwrap();
+            writeln!(&mut out, "  scodex sync [OPTIONS] <TARGET>").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Arguments:").unwrap();
+            writeln!(
+                &mut out,
+                "  <TARGET>  Remote destination in the form user@host:/target_path"
+            )
+            .unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "Options:").unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>  Pass an SSH identity file to ssh/scp"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help          Print help").unwrap();
+        }
         HelpTopic::Use => {
             writeln!(&mut out, "Usage:").unwrap();
             writeln!(&mut out, "  scodex use <EMAIL>").unwrap();
@@ -609,6 +650,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "  auto         切换到最佳账号，但不启动 Codex").unwrap();
             writeln!(&mut out, "  add          打开注册页，然后新增一个账号").unwrap();
             writeln!(&mut out, "  login        通过设备登录新增一个账号").unwrap();
+            writeln!(
+                &mut out,
+                "  deploy       把当前 auth.json 复制到远端机器 [别名：sync]"
+            )
+            .unwrap();
             writeln!(&mut out, "  use          按邮箱直接切换到一个已知账号").unwrap();
             writeln!(&mut out, "  list         显示最新账号额度").unwrap();
             writeln!(&mut out, "  refresh      刷新所有已知账号的实时额度").unwrap();
@@ -686,6 +732,26 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(&mut out, "选项：").unwrap();
             writeln!(&mut out, "      --switch  登录完成后切换到新账号").unwrap();
             writeln!(&mut out, "  -h, --help    显示帮助").unwrap();
+        }
+        HelpTopic::Deploy => {
+            writeln!(&mut out, "用法：").unwrap();
+            writeln!(&mut out, "  scodex deploy [选项] <TARGET>").unwrap();
+            writeln!(&mut out, "  scodex sync [选项] <TARGET>").unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "参数：").unwrap();
+            writeln!(
+                &mut out,
+                "  <TARGET>  远端目标，格式为 user@host:/target_path"
+            )
+            .unwrap();
+            writeln!(&mut out).unwrap();
+            writeln!(&mut out, "选项：").unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>  传给 ssh/scp 的 SSH 身份文件"
+            )
+            .unwrap();
+            writeln!(&mut out, "  -h, --help          显示帮助").unwrap();
         }
         HelpTopic::Use => {
             writeln!(&mut out, "用法：").unwrap();

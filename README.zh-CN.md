@@ -6,7 +6,7 @@
 
 这个仓库只包含代码，不包含账号池数据、额度缓存、本地配置或虚拟环境文件。
 
-现在只有 Rust 二进制发行线仍在维护。仓库里保留的 Python 实现只作为迁移参考，不再作为安装路径，也不再继续维护。
+这个仓库现在只维护 Rust 实现。源码树里只有 `scodex` 这一条受支持的运行时路径。
 
 如果你不喜欢或不习惯使用命令行，可以体验功能更丰富的 GUI 版本：<https://github.com/murongg/ai-accounts-hub>
 
@@ -43,6 +43,7 @@ irm https://raw.githubusercontent.com/lauzhihao/scodex/main/install.ps1 | iex
 - Windows 安装器：PowerShell 5+ 或 PowerShell 7+
 - `codex` 仍然是 `launch`、`login` 和透传命令的运行时依赖
 - 当缺少 `codex` 时，`scodex` 会提示是否执行官方安装命令 `npm install -g @openai/codex`
+- `deploy` 还依赖 `ssh` 和 `scp`
 
 源码构建：
 
@@ -68,6 +69,7 @@ cargo build --release
 | `scodex auto` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
 | `scodex add` | 尽量自动打开 OpenAI 注册页，然后通过设备登录添加一个账号 |
 | `scodex login` | 通过 `codex login --device-auth` 添加一个账号 |
+| `scodex deploy <target>` | 把当前 `~/.codex/auth.json` 复制到远端机器和路径（`sync` 为别名） |
 | `scodex use <email>` | 按邮箱直接切换到一个已知账号 |
 | `scodex list` | 先刷新实时额度，再显示最新账号额度 |
 | `scodex refresh` | 刷新所有已知账号的实时额度，并直接打印最新结果 |
@@ -133,6 +135,21 @@ scodex use <email>
 - 会按邮箱大小写不敏感精确匹配已知账号，并直接切换过去
 - 示例：`scodex use lauzhihao@qq.com`
 
+### `deploy`
+
+```bash
+scodex deploy [-i <identity_file>] <user@host:/target_path>
+scodex sync [-i <identity_file>] <user@host:/target_path>
+```
+
+- 会把当前正在使用的 `~/.codex/auth.json` 复制到远端机器
+- `deploy` 是主命令名；`sync` 是兼容别名，更适合“多台机器同步”的使用习惯
+- 如果 `<target_path>` 以 `auth.json` 结尾，就按远端完整文件路径处理
+- 否则会把 `<target_path>` 当成远端目录，并在其下写入 `auth.json`
+- `-i <identity_file>`：把 SSH 身份文件同时传给 `ssh` 和 `scp`
+- 命令会先准备远端目录，再复制凭证文件
+- 鉴权仍然沿用你自己的 SSH 配置；如果 `ssh` 或 `scp` 提示输入密码，就由你自己输入
+
 ### `list`
 
 ```bash
@@ -180,7 +197,7 @@ scodex upgrade [-f|--force]
 ```
 
 - 会从 GitHub Releases 下载当前平台匹配的最新发行资产并替换已安装二进制
-- `update` 仍然是主命令，用来兼容历史 Python 版本用户
+- `update` 仍然是主命令，用来兼容更早期的 scodex 版本用户
 - `upgrade` 是等价别名，给更偏好这个命名的用户使用
 - `-f`、`--force`：即使当前版本已经等于最新 tag，也强制重新安装一次
 
@@ -215,4 +232,4 @@ scodex exec "fix failing test"
 
 - CI 现在只维护 Rust 实现。
 - `v*` 标签会通过 GitHub Actions 发布预编译二进制。
-- 仓库中的 Python 文件已降级为 legacy 参考代码，不再继续维护。
+- 历史 Python 实现已经从这个仓库中移除。

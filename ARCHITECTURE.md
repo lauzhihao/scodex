@@ -1,6 +1,6 @@
 # Architecture
 
-This repository is moving from a single Python wrapper around Codex CLI to a Rust core with per-CLI adapters.
+This repository now uses a Rust core with per-CLI adapters.
 
 ## Goals
 
@@ -13,7 +13,6 @@ This repository is moving from a single Python wrapper around Codex CLI to a Rus
 
 - Do not assume every CLI supports live usage refresh.
 - Do not assume every CLI can switch accounts by replacing one credentials file.
-- Do not remove the existing Python implementation until the Rust path reaches feature parity for Codex.
 
 ## Layers
 
@@ -57,27 +56,22 @@ Each adapter must explicitly declare which features it supports.
 
 If an adapter does not support `live_usage`, the core must degrade gracefully instead of pretending automatic account scoring works.
 
-## Initial rollout
+## Current rollout
 
-Phase 1 is Codex-only in Rust.
+Phase 1 is complete: Codex support now runs on the Rust implementation.
 
-- keep current Python implementation as the production path
-- build the Rust CLI skeleton
-- port domain models and selection policy first
-- add a `CodexAdapter`
-- migrate commands incrementally after tests exist
+- keep the Codex path stable in Rust
+- preserve local-state compatibility for existing users
+- continue tightening tests around install, update, deploy, and account selection flows
 
 Phase 2 adds new adapters one by one.
 
 - `OpenCodeAdapter` is the first candidate after Codex because its auth/config surface is comparatively explicit
 - `ClaudeCodeAdapter` and `GeminiCliAdapter` should only move past proof-of-concept after identity switching and usage semantics are validated
 
-## Current repository mapping
+## Repository mapping
 
-The Python implementation currently mixes all layers together:
-
-- installer and shell integration live in `install.sh`
-- core policy and CLI-specific Codex behavior both live in `codex-autoswitch.py`
-
-The Rust migration should separate these concerns from the start.
-
+- installer and shell integration live in `install.sh` and `install.ps1`
+- core policy lives under `src/core`
+- CLI-specific Codex behavior lives in `src/adapters/codex.rs`
+- top-level command parsing and help live in `src/cli.rs`

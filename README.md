@@ -6,7 +6,7 @@
 
 The repository is intentionally code-only. It does not contain account pool data, cached usage, local config, or virtualenv files.
 
-The Rust binary is now the only maintained distribution target. The legacy Python implementation remains in the repository as a migration reference and is no longer the install path or the maintained runtime.
+This repository is now Rust-only. `scodex` is the maintained implementation and the only supported runtime in the source tree.
 
 If you do not like or are not used to the command line, try the more feature-rich GUI version: <https://github.com/murongg/ai-accounts-hub>
 
@@ -43,6 +43,7 @@ The installer:
 - Windows installer: PowerShell 5+ or PowerShell 7+
 - `codex` is still required at runtime for `launch`, `login`, and passthrough commands
 - when `codex` is missing, `scodex` prompts to install the official CLI with `npm install -g @openai/codex`
+- `deploy` additionally requires `ssh` and `scp`
 
 Build from source:
 
@@ -68,6 +69,7 @@ Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept onl
 | `scodex auto` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, without launching Codex |
 | `scodex add` | Open the OpenAI signup page when possible, then add one account through device auth |
 | `scodex login` | Add one account via `codex login --device-auth` |
+| `scodex deploy <target>` | Copy the current `~/.codex/auth.json` to a remote machine and path (`sync` is an alias) |
 | `scodex use <email>` | Switch directly to a known account by email |
 | `scodex list` | Refresh live usage, then show the latest account quotas |
 | `scodex refresh` | Refresh live usage for all known accounts and print the latest results |
@@ -133,6 +135,21 @@ scodex use <email>
 - switches directly to the known account whose email matches `<email>` case-insensitively
 - example: `scodex use lauzhihao@qq.com`
 
+### `deploy`
+
+```bash
+scodex deploy [-i <identity_file>] <user@host:/target_path>
+scodex sync [-i <identity_file>] <user@host:/target_path>
+```
+
+- copies the current live `~/.codex/auth.json` to the remote machine
+- `deploy` is the primary name; `sync` is a compatible alias for users who think in multi-machine sync flows
+- if `<target_path>` ends with `auth.json`, it is treated as the exact remote file path
+- otherwise `<target_path>` is treated as a remote directory and `auth.json` is written under it
+- `-i <identity_file>`: pass an SSH identity file to both `ssh` and `scp`
+- the command prepares the remote directory and then copies the credential file
+- authentication is left to your existing SSH setup; if `ssh` or `scp` asks for a password, enter it yourself
+
 ### `list`
 
 ```bash
@@ -180,7 +197,7 @@ scodex upgrade [-f|--force]
 ```
 
 - downloads the latest matching GitHub Releases asset for the current platform and replaces the installed binary
-- `update` remains the primary command for compatibility with the historical Python implementation
+- `update` remains the primary command for compatibility with earlier scodex releases
 - `upgrade` is a compatible alias for users who prefer that wording
 - `-f`, `--force`: force reinstall even when the current version already matches the latest release tag
 
@@ -215,4 +232,4 @@ Before pushing:
 
 - CI now targets the Rust implementation only.
 - Tagged releases `v*` publish prebuilt binaries through GitHub Actions.
-- The Python files in this repository are legacy reference code and are no longer maintained.
+- The historical Python implementation has been removed from this repository.

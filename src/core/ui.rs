@@ -384,6 +384,78 @@ impl Messages {
             "Press Enter to continue: "
         }
     }
+
+    pub fn deploy_start(&self, target: &str) -> String {
+        if self.is_zh() {
+            format!("正在把当前 Codex 凭证上传到 {target}")
+        } else {
+            format!("Deploying the current Codex credential to {target}")
+        }
+    }
+
+    pub fn deploy_completed(&self, target: &str) -> String {
+        if self.is_zh() {
+            format!("已把当前 Codex 凭证上传到 {target}")
+        } else {
+            format!("Deployed the current Codex credential to {target}")
+        }
+    }
+
+    pub fn deploy_missing_auth(&self, path: &Path) -> String {
+        if self.is_zh() {
+            format!("当前可用的 auth.json 不存在：{}", path.display())
+        } else {
+            format!("Current auth.json not found: {}", path.display())
+        }
+    }
+
+    pub fn deploy_invalid_target(&self, target: &str) -> String {
+        if self.is_zh() {
+            format!("无效的远端目标：{target}。请使用 user@host:/target_path")
+        } else {
+            format!("Invalid remote target: {target}. Use user@host:/target_path")
+        }
+    }
+
+    pub fn deploy_missing_ssh(&self) -> &'static str {
+        if self.is_zh() {
+            "未找到 ssh。执行 `scodex deploy` 需要它。"
+        } else {
+            "ssh not found; `scodex deploy` requires it."
+        }
+    }
+
+    pub fn deploy_missing_scp(&self) -> &'static str {
+        if self.is_zh() {
+            "未找到 scp。执行 `scodex deploy` 需要它。"
+        } else {
+            "scp not found; `scodex deploy` requires it."
+        }
+    }
+
+    pub fn deploy_identity_not_found(&self, path: &Path) -> String {
+        if self.is_zh() {
+            format!("SSH 身份文件不存在：{}", path.display())
+        } else {
+            format!("SSH identity file not found: {}", path.display())
+        }
+    }
+
+    pub fn deploy_prepare_remote_dir_failed(&self, status: i32) -> String {
+        if self.is_zh() {
+            format!("远端目录准备失败，退出码：{status}")
+        } else {
+            format!("Preparing the remote directory failed with status {status}")
+        }
+    }
+
+    pub fn deploy_copy_failed(&self, status: i32) -> String {
+        if self.is_zh() {
+            format!("凭证复制失败，退出码：{status}")
+        } else {
+            format!("Credential copy failed with status {status}")
+        }
+    }
 }
 
 #[cfg(test)]
