@@ -109,6 +109,160 @@ class CodexAutoswitchTest(unittest.TestCase):
         self.assertIsNotNone(best)
         self.assertEqual(best["id"], "five-heavy")
 
+    def test_ensure_best_account_keeps_current_account_when_five_hour_meets_threshold(self) -> None:
+        state = {
+            "version": 1,
+            "accounts": [
+                {"id": "current", "email": "current@example.com", "updated_at": 1},
+                {"id": "better", "email": "better@example.com", "updated_at": 1},
+            ],
+            "usage_cache": {},
+        }
+        original_refresh = autoswitch.refresh_all_accounts
+        original_identity = autoswitch.read_live_identity
+        original_choose_best = autoswitch.choose_best_account
+        original_switch = autoswitch.switch_account
+        switched: list[dict] = []
+
+        def fake_refresh(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            current_state["usage_cache"]["current"] = {
+                "five_hour_remaining_percent": 25,
+                "weekly_remaining_percent": 30,
+                "needs_relogin": False,
+            }
+            current_state["usage_cache"]["better"] = {
+                "five_hour_remaining_percent": 95,
+                "weekly_remaining_percent": 90,
+                "needs_relogin": False,
+            }
+
+        autoswitch.refresh_all_accounts = fake_refresh
+        autoswitch.read_live_identity = lambda: {"email": "current@example.com", "account_id": None}
+        autoswitch.choose_best_account = lambda current_state: (_ for _ in ()).throw(
+            AssertionError("should keep current account before scoring others")
+        )
+        autoswitch.switch_account = lambda account: switched.append(account)
+        try:
+            account, usage = autoswitch.ensure_best_account(
+                argparse.Namespace(no_import_known=True, no_login=True),
+                Path("/tmp/state"),
+                state,
+                perform_switch=True,
+            )
+        finally:
+            autoswitch.refresh_all_accounts = original_refresh
+            autoswitch.read_live_identity = original_identity
+            autoswitch.choose_best_account = original_choose_best
+            autoswitch.switch_account = original_switch
+
+        self.assertIsNotNone(account)
+        self.assertEqual(account["id"], "current")
+        self.assertEqual(usage["five_hour_remaining_percent"], 25)
+        self.assertEqual([item["id"] for item in switched], ["current"])
+
+    def test_ensure_best_account_falls_back_to_best_when_current_five_hour_below_threshold(self) -> None:
+        state = {
+            "version": 1,
+            "accounts": [
+                {"id": "current", "email": "current@example.com", "updated_at": 1},
+                {"id": "better", "email": "better@example.com", "updated_at": 1},
+            ],
+            "usage_cache": {},
+        }
+        original_refresh = autoswitch.refresh_all_accounts
+        original_identity = autoswitch.read_live_identity
+        original_switch = autoswitch.switch_account
+        switched: list[dict] = []
+
+        def fake_refresh(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            current_state["usage_cache"]["current"] = {
+                "five_hour_remaining_percent": 19,
+                "weekly_remaining_percent": 90,
+                "needs_relogin": False,
+                "credits_balance": 0,
+                "last_synced_at": 10,
+            }
+            current_state["usage_cache"]["better"] = {
+                "five_hour_remaining_percent": 95,
+                "weekly_remaining_percent": 20,
+                "needs_relogin": False,
+                "credits_balance": 0,
+                "last_synced_at": 10,
+            }
+
+        autoswitch.refresh_all_accounts = fake_refresh
+        autoswitch.read_live_identity = lambda: {"email": "current@example.com", "account_id": None}
+        autoswitch.switch_account = lambda account: switched.append(account)
+        try:
+            account, usage = autoswitch.ensure_best_account(
+                argparse.Namespace(no_import_known=True, no_login=True),
+                Path("/tmp/state"),
+                state,
+                perform_switch=True,
+            )
+        finally:
+            autoswitch.refresh_all_accounts = original_refresh
+            autoswitch.read_live_identity = original_identity
+            autoswitch.switch_account = original_switch
+
+        self.assertIsNotNone(account)
+        self.assertEqual(account["id"], "better")
+        self.assertEqual(usage["five_hour_remaining_percent"], 95)
+        self.assertEqual([item["id"] for item in switched], ["better"])
+
+    def test_ensure_best_account_falls_back_to_best_when_current_needs_relogin(self) -> None:
+        state = {
+            "version": 1,
+            "accounts": [
+                {"id": "current", "email": "current@example.com", "updated_at": 1},
+                {"id": "better", "email": "better@example.com", "updated_at": 1},
+            ],
+            "usage_cache": {},
+        }
+        original_refresh = autoswitch.refresh_all_accounts
+        original_identity = autoswitch.read_live_identity
+        original_switch = autoswitch.switch_account
+        switched: list[dict] = []
+
+        def fake_refresh(state_dir: Path, current_state: dict) -> None:
+            _ = state_dir
+            current_state["usage_cache"]["current"] = {
+                "five_hour_remaining_percent": 80,
+                "weekly_remaining_percent": 80,
+                "needs_relogin": True,
+                "credits_balance": 0,
+                "last_synced_at": 10,
+            }
+            current_state["usage_cache"]["better"] = {
+                "five_hour_remaining_percent": 60,
+                "weekly_remaining_percent": 60,
+                "needs_relogin": False,
+                "credits_balance": 0,
+                "last_synced_at": 10,
+            }
+
+        autoswitch.refresh_all_accounts = fake_refresh
+        autoswitch.read_live_identity = lambda: {"email": "current@example.com", "account_id": None}
+        autoswitch.switch_account = lambda account: switched.append(account)
+        try:
+            account, usage = autoswitch.ensure_best_account(
+                argparse.Namespace(no_import_known=True, no_login=True),
+                Path("/tmp/state"),
+                state,
+                perform_switch=True,
+            )
+        finally:
+            autoswitch.refresh_all_accounts = original_refresh
+            autoswitch.read_live_identity = original_identity
+            autoswitch.switch_account = original_switch
+
+        self.assertIsNotNone(account)
+        self.assertEqual(account["id"], "better")
+        self.assertEqual(usage["five_hour_remaining_percent"], 60)
+        self.assertEqual([item["id"] for item in switched], ["better"])
+
     def test_cmd_use_switches_to_exact_email_case_insensitively(self) -> None:
         state = {
             "version": 1,

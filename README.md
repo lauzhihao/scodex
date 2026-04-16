@@ -42,9 +42,9 @@ Use `scodex` as the default command. The legacy `auto-codex` wrapper is kept onl
 
 | Command | Purpose |
 | --- | --- |
-| `scodex` | Refresh usage, switch to the best account, then launch or resume Codex |
+| `scodex` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, then launch or resume Codex |
 | `scodex launch` | Explicit form of the default behavior |
-| `scodex auto` | Refresh usage, pick the best account, and switch without launching Codex |
+| `scodex auto` | Refresh usage, keep the current account when its 5h quota is at least 20%, otherwise switch to the best account, without launching Codex |
 | `scodex login` | Add one account via `codex login --device-auth` |
 | `scodex use <email>` | Switch directly to a known account by email |
 | `scodex list` | Refresh live usage, then show the latest account quotas |
@@ -72,6 +72,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 - `--no-resume`: always start a fresh Codex session instead of `resume --last`
 - `--no-launch`: switch the account but do not start Codex
 - extra args after the command are forwarded to Codex
+- after refresh, if the current account still has at least 20% remaining in the 5h window, `launch` keeps using it instead of re-scoring all accounts
 
 ### `auto`
 
@@ -79,7 +80,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 scodex auto [--no-import-known] [--no-login] [--dry-run]
 ```
 
-- refreshes usage and switches the selected account
+- refreshes usage and keeps the current account when its 5h quota is at least 20%; otherwise it switches to the best account
 - does not start Codex
 
 ### `login`

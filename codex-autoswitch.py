@@ -25,6 +25,7 @@ DEFAULT_STATE_BASENAME = "auto-codex"
 LEGACY_STATE_BASENAME = "codex-autoswitch"
 DEFAULT_INSTALL_BASE_URL = "https://raw.githubusercontent.com/lauzhihao/scodex/main"
 DEFAULT_PROGRAM_NAME = "scodex"
+CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT = 20
 KNOWN_COMMANDS = {"launch", "auto", "login", "use", "list", "refresh", "update", "import-auth", "import-known"}
 
 
@@ -677,6 +678,13 @@ def ensure_best_account(
         return record, usage
 
     refresh_all_accounts(state_dir, state)
+    current = choose_current_account(state)
+    if current is not None:
+        usage = state["usage_cache"].get(current["id"], {})
+        if perform_switch:
+            switch_account(current)
+        return current, usage
+
     best = choose_best_account(state)
     if best is None:
         if args.no_login:
@@ -934,6 +942,32 @@ def choose_best_account(state: dict) -> dict | None:
         return None
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1]
+
+
+def choose_current_account(state: dict) -> dict | None:
+    live = read_live_identity()
+    if not live:
+        return None
+    for account in state["accounts"]:
+        if not identity_matches(account, live):
+            continue
+        usage = state["usage_cache"].get(account["id"], {})
+        if is_current_account_usable(usage):
+            return account
+        return None
+    return None
+
+
+def is_current_account_usable(usage: dict) -> bool:
+    if usage.get("needs_relogin"):
+        return False
+    five_hour = usage.get("five_hour_remaining_percent")
+    if five_hour is None:
+        return False
+    try:
+        return float(five_hour) >= CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT
+    except (TypeError, ValueError):
+        return False
 
 
 def build_score(account: dict, usage: dict) -> tuple:

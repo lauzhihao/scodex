@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/lauzhihao/scodex/main/install.sh | 
 
 | 命令 | 作用 |
 | --- | --- |
-| `scodex` | 刷新额度、切换到最佳账号，然后启动或恢复 Codex |
+| `scodex` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，然后启动或恢复 Codex |
 | `scodex launch` | 默认行为的显式写法 |
-| `scodex auto` | 刷新额度并切换最佳账号，但不启动 Codex |
+| `scodex auto` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
 | `scodex login` | 通过 `codex login --device-auth` 添加一个账号 |
 | `scodex use <email>` | 按邮箱直接切换到一个已知账号 |
 | `scodex list` | 先刷新实时额度，再显示最新账号额度 |
@@ -72,6 +72,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 - `--no-resume`：总是新开会话，不执行 `resume --last`
 - `--no-launch`：只切换账号，不启动 Codex
 - 命令后面的额外参数会继续传给 Codex
+- 刷新后，如果当前账号的 5h 剩余额度仍然不少于 20%，`launch` 会直接继续使用它，不再重新对所有账号打分选号
 
 ### `auto`
 
@@ -79,7 +80,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 scodex auto [--no-import-known] [--no-login] [--dry-run]
 ```
 
-- 会刷新额度并切换到选中的账号
+- 会刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号
 - 不会启动 Codex
 
 ### `login`
