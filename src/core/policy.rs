@@ -13,6 +13,14 @@ pub fn choose_best_account<'a>(state: &'a State) -> Option<&'a AccountRecord> {
             if usage.needs_relogin || usage.last_sync_error.is_some() {
                 return None;
             }
+            // 排除周额度 <= 5% 的账号
+            if let Some(weekly) = usage.weekly_remaining_percent {
+                if weekly <= 5 {
+                    return None;
+                }
+            } else {
+                return None;
+            }
             Some((build_score(account, usage), account))
         })
         .collect();
@@ -50,10 +58,17 @@ pub fn is_current_account_usable(usage: &UsageSnapshot) -> bool {
         return false;
     }
 
-    match usage.five_hour_remaining_percent {
+    let five_hour_ok = match usage.five_hour_remaining_percent {
         Some(value) => (value as f64) >= CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT,
         None => false,
-    }
+    };
+
+    let weekly_ok = match usage.weekly_remaining_percent {
+        Some(value) => value > 5,
+        None => false,
+    };
+
+    five_hour_ok && weekly_ok
 }
 
 fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, f64, i64, i64) {
@@ -150,6 +165,18 @@ mod tests {
     fn current_account_below_threshold_is_not_usable() {
         let usage = UsageSnapshot {
             five_hour_remaining_percent: Some(19),
+            weekly_remaining_percent: Some(50),
+            ..UsageSnapshot::default()
+        };
+
+        assert!(!is_current_account_usable(&usage));
+    }
+
+    #[test]
+    fn current_account_with_low_weekly_quota_is_not_usable() {
+        let usage = UsageSnapshot {
+            five_hour_remaining_percent: Some(50),
+            weekly_remaining_percent: Some(5),
             ..UsageSnapshot::default()
         };
 
@@ -243,6 +270,51 @@ mod tests {
                         five_hour_remaining_percent: Some(100),
                         weekly_remaining_percent: Some(100),
                         last_sync_error: Some("quota api failed".into()),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+                (
+                    "healthy".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(80),
+                        weekly_remaining_percent: Some(60),
+                        ..UsageSnapshot::default()
+                    },
+                ),
+            ]),
+        };
+
+        let best = choose_best_account(&state);
+
+        assert_eq!(best.map(|item| item.id.as_str()), Some("healthy"));
+    }
+
+    #[test]
+    fn best_account_excludes_low_weekly_quota_candidates() {
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "low-weekly".into(),
+                    email: "low@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "healthy".into(),
+                    email: "healthy@example.com".into(),
+                    account_id: None,
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::from([
+                (
+                    "low-weekly".into(),
+                    UsageSnapshot {
+                        five_hour_remaining_percent: Some(100),
+                        weekly_remaining_percent: Some(3),
                         ..UsageSnapshot::default()
                     },
                 ),
