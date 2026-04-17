@@ -85,6 +85,14 @@ impl Messages {
         }
     }
 
+    pub fn no_usable_account_hint(&self) -> &'static str {
+        if self.is_zh() {
+            "没有可用账号，请先执行 `scodex add` 添加一个账号。"
+        } else {
+            "No usable accounts found. Run `scodex add` to add one first."
+        }
+    }
+
     pub fn no_importable_accounts(&self) -> &'static str {
         if self.is_zh() {
             "没有找到可导入的账号。"

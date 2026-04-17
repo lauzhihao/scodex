@@ -331,6 +331,10 @@ impl CodexAdapter {
 
     pub fn render_account_table(&self, state: &State, active: Option<&LiveIdentity>) -> String {
         let ui = ui::messages();
+        if state.accounts.is_empty() {
+            return ui.no_usable_account_hint().to_string();
+        }
+
         let mut accounts = state.accounts.iter().collect::<Vec<_>>();
         accounts.sort_by(|left, right| left.email.cmp(&right.email));
         let mut usable_count = 0usize;
@@ -370,14 +374,18 @@ impl CodexAdapter {
             })
             .collect::<Vec<_>>();
 
-        render_table(
-            &ui.table_headers(),
-            &rows,
-            &[
-                "center", "left", "center", "center", "center", "center", "center",
-            ],
-            Some(ui.usable_account_summary(usable_count)),
-        )
+        if usable_count == 0 {
+            ui.no_usable_account_hint().to_string()
+        } else {
+            render_table(
+                &ui.table_headers(),
+                &rows,
+                &[
+                    "center", "left", "center", "center", "center", "center", "center",
+                ],
+                Some(ui.usable_account_summary(usable_count)),
+            )
+        }
     }
 
     pub fn run_device_auth_login(
@@ -1691,7 +1699,7 @@ mod tests {
         parse_chatgpt_base_url, parse_remote_deploy_target, parse_yes_no, remote_parent_dir,
         render_table, strip_ansi_codes, visible_width,
     };
-    use crate::core::state::State;
+    use crate::core::state::{AccountRecord, State, UsageSnapshot};
 
     fn fake_jwt(payload: &str) -> String {
         let header = super::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
@@ -1870,6 +1878,35 @@ mod tests {
         assert!(rendered.contains("0 usable"));
         assert!(rendered.contains('┌'));
         assert!(rendered.contains('└'));
+    }
+
+    #[test]
+    fn render_account_table_returns_empty_state_message_without_accounts() {
+        let adapter = CodexAdapter;
+        let rendered = adapter.render_account_table(&State::default(), None);
+        assert_eq!(rendered, crate::core::ui::messages().no_usable_account_hint());
+    }
+
+    #[test]
+    fn render_account_table_returns_empty_state_message_when_no_account_is_usable() {
+        let adapter = CodexAdapter;
+        let mut state = State::default();
+        state.accounts.push(AccountRecord {
+            id: "acct-1".into(),
+            email: "a@example.com".into(),
+            auth_path: "/tmp/auth.json".into(),
+            ..Default::default()
+        });
+        state.usage_cache.insert(
+            "acct-1".into(),
+            UsageSnapshot {
+                last_sync_error: Some("quota api failed".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = adapter.render_account_table(&state, None);
+        assert_eq!(rendered, crate::core::ui::messages().no_usable_account_hint());
     }
 
     #[test]
