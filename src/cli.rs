@@ -98,6 +98,9 @@ pub struct RepoSyncArgs {
     #[arg(long, default_value = ".scodex-account-pool", value_name = "REPO_PATH")]
     pub path: String,
 
+    #[arg(short = 'i', value_name = "IDENTITY_FILE")]
+    pub identity_file: Option<PathBuf>,
+
     pub repo: String,
 }
 
@@ -244,7 +247,12 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Push(args) => {
-            let outcome = adapter.push_account_pool(&state, &args.repo, Some(&args.path))?;
+            let outcome = adapter.push_account_pool(
+                &state,
+                &args.repo,
+                Some(&args.path),
+                args.identity_file.as_deref(),
+            )?;
             if outcome.changed {
                 println!(
                     "{}",
@@ -256,8 +264,13 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Pull(args) => {
-            let outcome =
-                adapter.pull_account_pool(&state_dir, &mut state, &args.repo, Some(&args.path))?;
+            let outcome = adapter.pull_account_pool(
+                &state_dir,
+                &mut state,
+                &args.repo,
+                Some(&args.path),
+                args.identity_file.as_deref(),
+            )?;
             storage::save_state(&state_dir, &state)?;
             println!(
                 "{}",
@@ -662,6 +675,11 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "      --path <REPO_PATH>  Repository subdirectory used for the account pool"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>      SSH private key passed to git via GIT_SSH_COMMAND"
+            )
+            .unwrap();
             writeln!(&mut out, "Environment:").unwrap();
             writeln!(
                 &mut out,
@@ -685,6 +703,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "      --path <REPO_PATH>  Repository subdirectory used for the account pool"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>      SSH private key passed to git via GIT_SSH_COMMAND"
             )
             .unwrap();
             writeln!(&mut out, "Environment:").unwrap();
@@ -907,6 +930,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
                 "      --path <REPO_PATH>  仓库内用于保存账号池的子目录"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>      通过 GIT_SSH_COMMAND 传给 git 的 SSH 私钥"
+            )
+            .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();
             writeln!(&mut out, "  SCODEX_POOL_KEY  用于加密账号池的对称密钥来源").unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
@@ -922,6 +950,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "      --path <REPO_PATH>  仓库内用于保存账号池的子目录"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  -i <IDENTITY_FILE>      通过 GIT_SSH_COMMAND 传给 git 的 SSH 私钥"
             )
             .unwrap();
             writeln!(&mut out, "环境变量：").unwrap();

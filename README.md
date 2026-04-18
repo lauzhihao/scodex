@@ -159,7 +159,7 @@ scodex sync [-i <identity_file>] <user@host:/target_path>
 
 ```bash
 export SCODEX_POOL_KEY='replace-with-a-long-random-secret'
-scodex push [--path <repo_path>] <repo>
+scodex push [-i <identity_file>] [--path <repo_path>] <repo>
 ```
 
 - clones `<repo>` with your existing Git credentials
@@ -169,6 +169,7 @@ scodex push [--path <repo_path>] <repo>
 - always pushes the current local snapshot as the source of truth; it does not merge remote account-pool history
 - commits and pushes only when the exported bundle changed
 - `--path <repo_path>`: use a different repository subdirectory; it must stay relative and must not contain `..`
+- `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
 - if `git` is missing, `scodex` prints an install hint instead of trying to install it for you
 - if the repository is private and access fails, `scodex` tells you to check the repo URL plus your Git credentials, SSH key, or PAT
 
@@ -176,7 +177,7 @@ scodex push [--path <repo_path>] <repo>
 
 ```bash
 export SCODEX_POOL_KEY='replace-with-the-same-secret'
-scodex pull [--path <repo_path>] <repo>
+scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
 ```
 
 - clones `<repo>` with your existing Git credentials
@@ -186,6 +187,7 @@ scodex pull [--path <repo_path>] <repo>
 - clears old local account homes and resets local usage cache before writing the pulled snapshot
 - if the key is wrong, `pull` fails with a decryption error instead of importing partial data
 - `--path <repo_path>`: read from a different repository subdirectory; it must stay relative and must not contain `..`
+- `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
 
 ### `list`
 

@@ -29,6 +29,7 @@ impl CodexAdapter {
         state: &State,
         repo: &str,
         bundle_dir: Option<&str>,
+        identity_file: Option<&Path>,
     ) -> Result<PushOutcome> {
         let ui = core_ui::messages();
         if state.accounts.is_empty() {
@@ -40,9 +41,10 @@ impl CodexAdapter {
         if repo.is_empty() {
             bail!("{}", ui.repo_sync_invalid_repo());
         }
+        validate_identity_file(identity_file)?;
         let bundle_dir = resolve_bundle_dir(bundle_dir)?;
         let bundle_key = resolve_bundle_key()?;
-        let checkout = clone_repo(&git_bin, repo)?;
+        let checkout = clone_repo(&git_bin, repo, identity_file)?;
         let bundle_root = checkout.checkout_dir.join(&bundle_dir);
         let bundle_path = bundle_root.join(BUNDLE_FILENAME);
         let bundle = build_repo_bundle(state)?;
@@ -71,7 +73,7 @@ impl CodexAdapter {
         }
 
         git_commit(&git_bin, &checkout.checkout_dir)?;
-        git_push(&git_bin, &checkout.checkout_dir, repo)?;
+        git_push(&git_bin, &checkout.checkout_dir, repo, identity_file)?;
 
         Ok(PushOutcome {
             changed: true,
@@ -85,6 +87,7 @@ impl CodexAdapter {
         state: &mut State,
         repo: &str,
         bundle_dir: Option<&str>,
+        identity_file: Option<&Path>,
     ) -> Result<PullOutcome> {
         let ui = core_ui::messages();
         let git_bin = resolve_git_bin()?;
@@ -92,9 +95,10 @@ impl CodexAdapter {
         if repo.is_empty() {
             bail!("{}", ui.repo_sync_invalid_repo());
         }
+        validate_identity_file(identity_file)?;
         let bundle_dir = resolve_bundle_dir(bundle_dir)?;
         let bundle_key = resolve_bundle_key()?;
-        let checkout = clone_repo(&git_bin, repo)?;
+        let checkout = clone_repo(&git_bin, repo, identity_file)?;
         let bundle_root = checkout.checkout_dir.join(&bundle_dir);
         let bundle_path = bundle_root.join(BUNDLE_FILENAME);
 
@@ -365,13 +369,14 @@ fn resolve_git_bin() -> Result<PathBuf> {
     Ok(git_bin)
 }
 
-fn clone_repo(git_bin: &Path, repo: &str) -> Result<RepoCheckout> {
+fn clone_repo(git_bin: &Path, repo: &str, identity_file: Option<&Path>) -> Result<RepoCheckout> {
     let checkout = RepoCheckout::new("scodex-git")?;
     let output = run_git(
         git_bin,
         ["clone", "--depth", "1", repo],
         Some(&checkout.checkout_dir),
         None,
+        identity_file,
     )?;
     if !output.status.success() {
         let stderr = git_stderr(&output);
@@ -400,6 +405,7 @@ fn git_add(git_bin: &Path, checkout_dir: &Path, bundle_dir: &Path) -> Result<()>
                 bundle_dir.display().to_string(),
             ],
         )),
+        None,
     )?;
     if !output.status.success() {
         bail!(
@@ -424,6 +430,7 @@ fn git_has_changes(git_bin: &Path, checkout_dir: &Path, bundle_dir: &Path) -> Re
                 bundle_dir.display().to_string(),
             ],
         )),
+        None,
     )?;
     if !output.status.success() {
         bail!(
@@ -452,6 +459,7 @@ fn git_commit(git_bin: &Path, checkout_dir: &Path) -> Result<()> {
                 message,
             ],
         )),
+        None,
     )?;
     if !output.status.success() {
         bail!(
@@ -462,7 +470,12 @@ fn git_commit(git_bin: &Path, checkout_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_push(git_bin: &Path, checkout_dir: &Path, repo: &str) -> Result<()> {
+fn git_push(
+    git_bin: &Path,
+    checkout_dir: &Path,
+    repo: &str,
+    identity_file: Option<&Path>,
+) -> Result<()> {
     let output = run_git(
         git_bin,
         ["-C", ""],
@@ -471,6 +484,7 @@ fn git_push(git_bin: &Path, checkout_dir: &Path, repo: &str) -> Result<()> {
             checkout_dir,
             vec!["push".into(), "origin".into(), "HEAD".into()],
         )),
+        identity_file,
     )?;
     if !output.status.success() {
         let stderr = git_stderr(&output);
@@ -490,6 +504,7 @@ fn run_git<const N: usize>(
     fixed_args: [&str; N],
     clone_target: Option<&Path>,
     dynamic: Option<(&Path, Vec<String>)>,
+    identity_file: Option<&Path>,
 ) -> Result<Output> {
     let mut command = Command::new(git_bin);
     if let Some((checkout_dir, args)) = dynamic {
@@ -500,9 +515,28 @@ fn run_git<const N: usize>(
             command.arg(clone_target);
         }
     }
+    if let Some(identity_file) = identity_file {
+        command.env("GIT_SSH_COMMAND", build_git_ssh_command(identity_file));
+    }
     command
         .output()
         .with_context(|| format!("failed to execute {}", git_bin.display()))
+}
+
+fn validate_identity_file(identity_file: Option<&Path>) -> Result<()> {
+    if let Some(path) = identity_file {
+        let ui = core_ui::messages();
+        storage::ensure_exists(path, "SSH identity file")
+            .map_err(|_| anyhow!(ui.deploy_identity_not_found(path)))?;
+    }
+    Ok(())
+}
+
+// 用单引号包裹并把内部单引号转义为 '\''，避免 shell 拆分路径中的空格或特殊字符
+fn build_git_ssh_command(identity_file: &Path) -> String {
+    let raw = identity_file.to_string_lossy();
+    let escaped = raw.replace('\'', "'\\''");
+    format!("ssh -i '{escaped}' -o IdentitiesOnly=yes")
 }
 
 fn git_stderr(output: &Output) -> String {
@@ -604,8 +638,8 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        RepoBundle, RepoBundleAccount, decrypt_bundle_bytes, derive_bundle_key,
-        encrypt_bundle_bytes, overwrite_local_account_pool, resolve_bundle_dir,
+        RepoBundle, RepoBundleAccount, build_git_ssh_command, decrypt_bundle_bytes,
+        derive_bundle_key, encrypt_bundle_bytes, overwrite_local_account_pool, resolve_bundle_dir,
         resolve_bundle_key_from_value,
     };
 
@@ -662,6 +696,30 @@ mod tests {
     #[test]
     fn resolve_bundle_key_requires_env_var() {
         assert!(resolve_bundle_key_from_value(None).is_err());
+    }
+
+    #[test]
+    fn build_git_ssh_command_quotes_plain_path() {
+        let cmd = build_git_ssh_command(std::path::Path::new("/home/alice/.ssh/id_ed25519"));
+        assert_eq!(
+            cmd,
+            "ssh -i '/home/alice/.ssh/id_ed25519' -o IdentitiesOnly=yes"
+        );
+    }
+
+    #[test]
+    fn build_git_ssh_command_handles_spaces() {
+        let cmd = build_git_ssh_command(std::path::Path::new("/tmp/with space/id_rsa"));
+        assert_eq!(cmd, "ssh -i '/tmp/with space/id_rsa' -o IdentitiesOnly=yes");
+    }
+
+    #[test]
+    fn build_git_ssh_command_escapes_single_quote() {
+        let cmd = build_git_ssh_command(std::path::Path::new("/tmp/alice's keys/id_rsa"));
+        assert_eq!(
+            cmd,
+            "ssh -i '/tmp/alice'\\''s keys/id_rsa' -o IdentitiesOnly=yes"
+        );
     }
 
     #[test]
