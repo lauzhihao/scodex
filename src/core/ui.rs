@@ -543,6 +543,18 @@ impl Messages {
         }
     }
 
+    pub fn repo_sync_missing_repo(&self, env_name: &str) -> String {
+        if self.is_zh() {
+            format!(
+                "未找到账号池仓库配置。请传入 `<REPO>`，或设置环境变量 `{env_name}`，或先执行一次带 `<REPO>` 的 `scodex push/pull` 以保存本地配置。"
+            )
+        } else {
+            format!(
+                "No account-pool repository configured. Pass `<REPO>`, set `{env_name}`, or run `scodex push/pull` once with `<REPO>` to save it locally."
+            )
+        }
+    }
+
     pub fn repo_sync_invalid_path(&self, path: &str) -> String {
         if self.is_zh() {
             format!("无效的仓库子目录：{path}。只允许相对路径，且不能包含 `..`。")

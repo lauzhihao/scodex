@@ -176,7 +176,7 @@ scodex sync [-i <identity_file>] <user@host:/target_path>
 
 ```bash
 export SCODEX_POOL_KEY='替换成一段足够长的随机 secret'
-scodex push [-i <identity_file>] [--path <repo_path>] <repo>
+scodex push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 会用你现有的 Git 凭据克隆 `<repo>`
@@ -189,6 +189,9 @@ scodex push [-i <identity_file>] [--path <repo_path>] <repo>
 - 只有导出的账号池真的发生变化时，才会提交并推送
 - `--path <repo_path>`：改用仓库内的其他子目录；必须是相对路径，且不能包含 `..`
 - 如果未传 `--path`，且设置了 `SCODEX_POOL_PATH`，则优先使用该环境变量
+- 如果未传 `[repo]`，且设置了 `SCODEX_POOL_REPO`，则优先使用该环境变量
+- 如果 `[repo]` 和 `SCODEX_POOL_REPO` 都没有，则回退到 `$SCODEX_HOME/state.json` 里已保存的仓库配置
+- 只要本次显式传了 `[repo]`，`scodex` 就会把它保存到本地状态，供后续 `push/pull` 复用
 - `-i <identity_file>`：通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 git，用于 SSH 协议的仓库
 - 如果缺少 `git`，`scodex` 只会给出安装提示，不会强制替你安装
 - 如果私有仓库访问失败，`scodex` 会明确提示你检查仓库 URL，以及 Git 凭据、SSH key 或 PAT
@@ -197,7 +200,7 @@ scodex push [-i <identity_file>] [--path <repo_path>] <repo>
 
 ```bash
 export SCODEX_POOL_KEY='替换成和 push 时相同的 secret'
-scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
+scodex pull [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - 会用你现有的 Git 凭据克隆 `<repo>`
@@ -211,6 +214,9 @@ scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
 - 如果密钥不对，会直接报解密失败，不会导入半套数据
 - `--path <repo_path>`：改用仓库内的其他子目录；必须是相对路径，且不能包含 `..`
 - 如果未传 `--path`，且设置了 `SCODEX_POOL_PATH`，则优先使用该环境变量
+- 如果未传 `[repo]`，且设置了 `SCODEX_POOL_REPO`，则优先使用该环境变量
+- 如果 `[repo]` 和 `SCODEX_POOL_REPO` 都没有，则回退到 `$SCODEX_HOME/state.json` 里已保存的仓库配置
+- 只要本次显式传了 `[repo]`，`scodex` 就会把它保存到本地状态，供后续 `push/pull` 复用
 - `-i <identity_file>`：通过 `GIT_SSH_COMMAND` 把 SSH 私钥传给 git，用于 SSH 协议的仓库
 
 ### `list`

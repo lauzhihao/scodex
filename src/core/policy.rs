@@ -44,6 +44,18 @@ pub fn choose_current_account<'a>(
     is_current_account_usable(usage).then_some(account)
 }
 
+pub fn choose_current_api_account<'a>(
+    state: &'a State,
+    live: Option<&LiveIdentity>,
+) -> Option<&'a AccountRecord> {
+    let live = live?;
+    state
+        .accounts
+        .iter()
+        .filter(|account| account.is_api())
+        .find(|account| identity_matches(account, live))
+}
+
 pub fn identity_matches(account: &AccountRecord, live: &LiveIdentity) -> bool {
     if live.scodex_account_id.as_deref() == Some(account.id.as_str()) {
         return true;
@@ -131,7 +143,10 @@ impl TotalCmpTuple for (i64, i64, i64, f64, i64, i64) {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{choose_best_account, choose_current_account, is_current_account_usable};
+    use super::{
+        choose_best_account, choose_current_account, choose_current_api_account,
+        is_current_account_usable,
+    };
     use crate::core::state::{AccountRecord, AccountType, LiveIdentity, State, UsageSnapshot};
 
     #[test]
@@ -172,6 +187,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let current = choose_current_account(
@@ -195,6 +211,41 @@ mod tests {
         };
 
         assert!(!is_current_account_usable(&usage));
+    }
+
+    #[test]
+    fn current_api_account_is_selected_from_live_scodex_account_id() {
+        let state = State {
+            version: 1,
+            accounts: vec![
+                AccountRecord {
+                    id: "api".into(),
+                    account_type: AccountType::Api,
+                    email: "56wxyz@openrouter".into(),
+                    updated_at: 100,
+                    ..AccountRecord::default()
+                },
+                AccountRecord {
+                    id: "subscription".into(),
+                    email: "subscription@example.com".into(),
+                    updated_at: 1,
+                    ..AccountRecord::default()
+                },
+            ],
+            usage_cache: BTreeMap::new(),
+            repo_sync: Default::default(),
+        };
+
+        let current = choose_current_api_account(
+            &state,
+            Some(&LiveIdentity {
+                email: String::new(),
+                account_id: None,
+                scodex_account_id: Some("api".into()),
+            }),
+        );
+
+        assert_eq!(current.map(|item| item.id.as_str()), Some("api"));
     }
 
     #[test]
@@ -234,6 +285,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -305,6 +357,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -351,6 +404,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -403,6 +457,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -458,6 +513,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -509,6 +565,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);
@@ -554,6 +611,7 @@ mod tests {
                     },
                 ),
             ]),
+            repo_sync: Default::default(),
         };
 
         let best = choose_best_account(&state);

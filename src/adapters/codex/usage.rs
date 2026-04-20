@@ -554,6 +554,7 @@ mod tests {
                     ..UsageSnapshot::default()
                 },
             )]),
+            repo_sync: Default::default(),
         };
 
         adapter.refresh_all_accounts(&mut state);

@@ -176,7 +176,7 @@ scodex sync [-i <identity_file>] <user@host:/target_path>
 
 ```bash
 export SCODEX_POOL_KEY='replace-with-a-long-random-secret'
-scodex push [-i <identity_file>] [--path <repo_path>] <repo>
+scodex push [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones `<repo>` with your existing Git credentials
@@ -189,6 +189,9 @@ scodex push [-i <identity_file>] [--path <repo_path>] <repo>
 - commits and pushes only when the exported bundle changed
 - `--path <repo_path>`: use a different repository subdirectory; it must stay relative and must not contain `..`
 - if `--path` is omitted, `SCODEX_POOL_PATH` is used when set
+- if `[repo]` is omitted, `SCODEX_POOL_REPO` is used when set
+- if `[repo]` and `SCODEX_POOL_REPO` are both missing, the saved local value in `$SCODEX_HOME/state.json` is used
+- if `[repo]` is explicitly provided, `scodex` saves it to local state for future `push/pull`
 - `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
 - if `git` is missing, `scodex` prints an install hint instead of trying to install it for you
 - if the repository is private and access fails, `scodex` tells you to check the repo URL plus your Git credentials, SSH key, or PAT
@@ -197,7 +200,7 @@ scodex push [-i <identity_file>] [--path <repo_path>] <repo>
 
 ```bash
 export SCODEX_POOL_KEY='replace-with-the-same-secret'
-scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
+scodex pull [-i <identity_file>] [--path <repo_path>] [repo]
 ```
 
 - clones `<repo>` with your existing Git credentials
@@ -211,6 +214,9 @@ scodex pull [-i <identity_file>] [--path <repo_path>] <repo>
 - if the key is wrong, `pull` fails with a decryption error instead of importing partial data
 - `--path <repo_path>`: read from a different repository subdirectory; it must stay relative and must not contain `..`
 - if `--path` is omitted, `SCODEX_POOL_PATH` is used when set
+- if `[repo]` is omitted, `SCODEX_POOL_REPO` is used when set
+- if `[repo]` and `SCODEX_POOL_REPO` are both missing, the saved local value in `$SCODEX_HOME/state.json` is used
+- if `[repo]` is explicitly provided, `scodex` saves it to local state for future `push/pull`
 - `-i <identity_file>`: pass an SSH private key to git via `GIT_SSH_COMMAND` for SSH-based remotes
 
 ### `list`

@@ -12,6 +12,8 @@ use crate::core::storage;
 use crate::core::ui;
 use crate::core::update;
 
+const POOL_REPO_ENV: &str = "SCODEX_POOL_REPO";
+
 #[derive(Debug, Parser)]
 #[command(name = "scodex")]
 pub struct Cli {
@@ -118,7 +120,7 @@ pub struct RepoSyncArgs {
     #[arg(short = 'i', value_name = "IDENTITY_FILE")]
     pub identity_file: Option<PathBuf>,
 
-    pub repo: String,
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -309,34 +311,38 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Push(args) => {
+            let (repo, repo_from_cli) = resolve_repo_for_sync(args.repo.as_deref(), &state, &ui)?;
+            persist_repo_from_cli(&state_dir, &mut state, &repo, repo_from_cli)?;
             let outcome = adapter.push_account_pool(
                 &state,
-                &args.repo,
+                &repo,
                 args.path.as_deref(),
                 args.identity_file.as_deref(),
             )?;
             if outcome.changed {
                 println!(
                     "{}",
-                    ui.repo_push_completed(&args.repo, outcome.exported_accounts)
+                    ui.repo_push_completed(&repo, outcome.exported_accounts)
                 );
             } else {
-                println!("{}", ui.repo_push_no_changes(&args.repo));
+                println!("{}", ui.repo_push_no_changes(&repo));
             }
             0
         }
         Command::Pull(args) => {
+            let (repo, repo_from_cli) = resolve_repo_for_sync(args.repo.as_deref(), &state, &ui)?;
+            persist_repo_from_cli(&state_dir, &mut state, &repo, repo_from_cli)?;
             let outcome = adapter.pull_account_pool(
                 &state_dir,
                 &mut state,
-                &args.repo,
+                &repo,
                 args.path.as_deref(),
                 args.identity_file.as_deref(),
             )?;
             storage::save_state(&state_dir, &state)?;
             println!(
                 "{}",
-                ui.repo_pull_completed(&args.repo, outcome.imported_accounts)
+                ui.repo_pull_completed(&repo, outcome.imported_accounts)
             );
             adapter.refresh_all_accounts(&mut state);
             storage::save_state(&state_dir, &state)?;
@@ -483,6 +489,61 @@ fn build_api_login_request(args: &ApiArgs, ui: &ui::Messages) -> Result<ApiLogin
         base_url: base_url.to_string(),
         provider: provider.to_ascii_lowercase(),
     })
+}
+
+fn resolve_repo_for_sync(
+    cli_repo: Option<&str>,
+    state: &crate::core::state::State,
+    ui: &ui::Messages,
+) -> Result<(String, bool)> {
+    let cli_repo = cli_repo
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let env_repo = configured_repo_from_env();
+    let stored_repo = state.repo_sync.pool_repo.as_deref();
+    let resolved = resolve_repo_source(cli_repo.as_deref(), env_repo.as_deref(), stored_repo);
+    let Some(repo) = resolved else {
+        anyhow::bail!("{}", ui.repo_sync_missing_repo(POOL_REPO_ENV));
+    };
+    Ok((repo.to_string(), cli_repo.as_deref() == Some(repo)))
+}
+
+fn resolve_repo_source<'a>(
+    cli_repo: Option<&'a str>,
+    env_repo: Option<&'a str>,
+    stored_repo: Option<&'a str>,
+) -> Option<&'a str> {
+    cli_repo
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_repo.map(str::trim).filter(|value| !value.is_empty()))
+        .or_else(|| stored_repo.map(str::trim).filter(|value| !value.is_empty()))
+}
+
+fn configured_repo_from_env() -> Option<String> {
+    env::var(POOL_REPO_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn persist_repo_from_cli(
+    state_dir: &std::path::Path,
+    state: &mut crate::core::state::State,
+    repo: &str,
+    repo_from_cli: bool,
+) -> Result<()> {
+    if !repo_from_cli {
+        return Ok(());
+    }
+
+    if state.repo_sync.pool_repo.as_deref() == Some(repo) {
+        return Ok(());
+    }
+    state.repo_sync.pool_repo = Some(repo.to_string());
+    storage::save_state(state_dir, state)?;
+    Ok(())
 }
 
 fn print_selection(prefix: &str, account: &AccountRecord, usage: &UsageSnapshot) {
@@ -808,12 +869,12 @@ fn render_help_en(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex push [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  scodex push [OPTIONS] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <REPO>  Git remote URL or local repository path"
+                "  [REPO]  Git remote URL or local repository path (CLI > SCODEX_POOL_REPO > local state)"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -839,16 +900,21 @@ fn render_help_en(topic: HelpTopic) -> String {
                 "  SCODEX_POOL_PATH Repository subdirectory used for the account pool when --path is omitted"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  SCODEX_POOL_REPO Repository URL/path used when [REPO] is omitted"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "Usage:").unwrap();
-            writeln!(&mut out, "  scodex pull [OPTIONS] <REPO>").unwrap();
+            writeln!(&mut out, "  scodex pull [OPTIONS] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "Arguments:").unwrap();
             writeln!(
                 &mut out,
-                "  <REPO>  Git remote URL or local repository path"
+                "  [REPO]  Git remote URL or local repository path (CLI > SCODEX_POOL_REPO > local state)"
             )
             .unwrap();
             writeln!(&mut out).unwrap();
@@ -872,6 +938,11 @@ fn render_help_en(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  SCODEX_POOL_PATH Repository subdirectory used for the account pool when --path is omitted"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCODEX_POOL_REPO Repository URL/path used when [REPO] is omitted"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help            Print help").unwrap();
@@ -1139,10 +1210,14 @@ fn render_help_zh(topic: HelpTopic) -> String {
         }
         HelpTopic::Push => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex push [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  scodex push [选项] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
+            writeln!(
+                &mut out,
+                "  [REPO]  Git 远端 URL 或本地仓库路径（优先级：命令行 > SCODEX_POOL_REPO > 本地状态）"
+            )
+            .unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -1162,14 +1237,23 @@ fn render_help_zh(topic: HelpTopic) -> String {
                 "  SCODEX_POOL_PATH 未传 --path 时，仓库内账号池子目录来源"
             )
             .unwrap();
+            writeln!(
+                &mut out,
+                "  SCODEX_POOL_REPO 未传 [REPO] 时，账号池仓库 URL/路径来源"
+            )
+            .unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
         }
         HelpTopic::Pull => {
             writeln!(&mut out, "用法：").unwrap();
-            writeln!(&mut out, "  scodex pull [选项] <REPO>").unwrap();
+            writeln!(&mut out, "  scodex pull [选项] [REPO]").unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "参数：").unwrap();
-            writeln!(&mut out, "  <REPO>  Git 远端 URL 或本地仓库路径").unwrap();
+            writeln!(
+                &mut out,
+                "  [REPO]  Git 远端 URL 或本地仓库路径（优先级：命令行 > SCODEX_POOL_REPO > 本地状态）"
+            )
+            .unwrap();
             writeln!(&mut out).unwrap();
             writeln!(&mut out, "选项：").unwrap();
             writeln!(
@@ -1187,6 +1271,11 @@ fn render_help_zh(topic: HelpTopic) -> String {
             writeln!(
                 &mut out,
                 "  SCODEX_POOL_PATH 未传 --path 时，仓库内账号池子目录来源"
+            )
+            .unwrap();
+            writeln!(
+                &mut out,
+                "  SCODEX_POOL_REPO 未传 [REPO] 时，账号池仓库 URL/路径来源"
             )
             .unwrap();
             writeln!(&mut out, "  -h, --help            显示帮助").unwrap();
@@ -1268,7 +1357,7 @@ fn render_help_zh(topic: HelpTopic) -> String {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command};
+    use super::{Cli, Command, resolve_repo_source};
 
     #[test]
     fn add_supports_api_options() {
@@ -1298,5 +1387,51 @@ mod tests {
             Some("https://example.com/v1")
         );
         assert_eq!(args.api_args.provider.as_deref(), Some("openrouter"));
+    }
+
+    #[test]
+    fn push_allows_optional_repo_argument() {
+        let cli = Cli::try_parse_from(["scodex", "push"]).expect("push without repo should parse");
+        let Command::Push(args) = cli.command.expect("subcommand should exist") else {
+            panic!("expected push command");
+        };
+        assert!(args.repo.is_none());
+    }
+
+    #[test]
+    fn repo_source_prefers_cli_over_env_and_state() {
+        assert_eq!(
+            resolve_repo_source(
+                Some("git@cli.example:pool.git"),
+                Some("git@env.example:pool.git"),
+                Some("git@state.example:pool.git")
+            ),
+            Some("git@cli.example:pool.git")
+        );
+    }
+
+    #[test]
+    fn repo_source_prefers_env_over_state_when_cli_missing() {
+        assert_eq!(
+            resolve_repo_source(
+                None,
+                Some("git@env.example:pool.git"),
+                Some("git@state.example:pool.git")
+            ),
+            Some("git@env.example:pool.git")
+        );
+    }
+
+    #[test]
+    fn repo_source_uses_state_when_cli_and_env_missing() {
+        assert_eq!(
+            resolve_repo_source(None, None, Some("git@state.example:pool.git")),
+            Some("git@state.example:pool.git")
+        );
+    }
+
+    #[test]
+    fn repo_source_ignores_blank_values() {
+        assert_eq!(resolve_repo_source(Some("  "), Some(""), Some("   ")), None);
     }
 }

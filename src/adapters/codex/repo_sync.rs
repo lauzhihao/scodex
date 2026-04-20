@@ -374,6 +374,7 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
         version: STATE_VERSION,
         accounts: records,
         usage_cache: std::collections::BTreeMap::new(),
+        repo_sync: Default::default(),
     })
 }
 

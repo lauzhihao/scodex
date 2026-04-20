@@ -81,6 +81,12 @@ pub struct LiveIdentity {
     pub scodex_account_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RepoSyncConfig {
+    #[serde(default)]
+    pub pool_repo: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct State {
     #[serde(default = "default_state_version")]
@@ -89,6 +95,8 @@ pub struct State {
     pub accounts: Vec<AccountRecord>,
     #[serde(default)]
     pub usage_cache: std::collections::BTreeMap<String, UsageSnapshot>,
+    #[serde(default)]
+    pub repo_sync: RepoSyncConfig,
 }
 
 impl Default for State {
@@ -97,6 +105,7 @@ impl Default for State {
             version: STATE_VERSION,
             accounts: Vec::new(),
             usage_cache: std::collections::BTreeMap::new(),
+            repo_sync: RepoSyncConfig::default(),
         }
     }
 }

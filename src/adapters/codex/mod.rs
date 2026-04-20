@@ -13,7 +13,9 @@ use uuid::Uuid;
 use self::auth::decode_identity;
 use self::paths::{codex_home, codex_install_command, find_codex_bin, find_in_path};
 use crate::adapters::{AdapterCapabilities, CliAdapter};
-use crate::core::policy::{choose_best_account, choose_current_account};
+use crate::core::policy::{
+    choose_best_account, choose_current_account, choose_current_api_account,
+};
 use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
@@ -96,10 +98,17 @@ impl CodexAdapter {
             return Ok(Some((record, usage)));
         }
 
+        let live_identity = self.read_live_identity();
+        if let Some(current) = choose_current_api_account(state, live_identity.as_ref()).cloned() {
+            let usage = UsageSnapshot::default();
+            if perform_switch {
+                self.switch_account(&current)?;
+            }
+            return Ok(Some((current, usage)));
+        }
+
         self.refresh_all_accounts(state);
-        if let Some(current) =
-            choose_current_account(state, self.read_live_identity().as_ref()).cloned()
-        {
+        if let Some(current) = choose_current_account(state, live_identity.as_ref()).cloned() {
             let usage = state
                 .usage_cache
                 .get(&current.id)
