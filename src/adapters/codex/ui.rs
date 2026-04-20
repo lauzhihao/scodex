@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal};
 use chrono::{DateTime, Local, Utc};
 use unicode_width::UnicodeWidthStr;
 
+use super::account::{codex_account_id, codex_plan};
 use super::CodexAdapter;
 use crate::core::state::{AccountRecord, AccountType, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
@@ -19,7 +20,7 @@ impl CodexAdapter {
         accounts.sort_by(|left, right| {
             account_type_sort_key(left)
                 .cmp(&account_type_sort_key(right))
-                .then_with(|| left.email.cmp(&right.email))
+                .then_with(|| left.effective_display_key().cmp(right.effective_display_key()))
         });
         let mut usable_count = 0usize;
         let has_api_account = accounts.iter().any(|account| account.is_api());
@@ -41,7 +42,7 @@ impl CodexAdapter {
                     } else {
                         String::new()
                     },
-                    account.email.clone(),
+                    account.effective_display_key().to_string(),
                     format_account_type(account),
                 ];
 
@@ -54,9 +55,7 @@ impl CodexAdapter {
                         span_align: "center",
                     }
                 } else {
-                    let plan = account
-                        .plan
-                        .clone()
+                    let plan = codex_plan(account)
                         .or(usage.plan.clone())
                         .unwrap_or_else(|| ui.unknown().into());
                     TableRow::Cells(
@@ -102,8 +101,9 @@ fn active_matches(account: &AccountRecord, live: &LiveIdentity) -> bool {
         return true;
     }
 
-    account.email.eq_ignore_ascii_case(&live.email)
-        || account.account_id.is_some() && account.account_id == live.account_id
+    let account_id = codex_account_id(account);
+    account.effective_display_key().eq_ignore_ascii_case(&live.email)
+        || account_id.is_some() && account_id == live.account_id
 }
 
 fn format_account_type(account: &AccountRecord) -> String {

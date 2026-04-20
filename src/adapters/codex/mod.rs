@@ -12,8 +12,9 @@ use uuid::Uuid;
 
 use self::auth::decode_identity;
 use self::paths::{codex_home, codex_install_command, find_codex_bin, find_in_path};
-use crate::adapters::{AdapterCapabilities, AppAdapter, CliAdapter};
+use crate::adapters::{AdapterCapabilities, AdapterCommandRequest, AppAdapter, CliAdapter};
 use crate::core::engine;
+use crate::core::policy;
 use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
@@ -69,14 +70,14 @@ impl AppAdapter for CodexAdapter {
         &self,
         state_dir: &Path,
         state: &mut State,
-        args: &crate::cli::LoginArgs,
+        request: &AdapterCommandRequest,
     ) -> Result<AccountRecord> {
-        if args.api_args.api {
-            let request = build_api_login_request(args)?;
-            self.run_api_key_login(state_dir, state, request)
-        } else if args.oauth {
-            let request = build_autofill_request(args)?;
-            self.run_device_auth_login_autofill(state_dir, state, request)
+        if request.flags.contains("api") {
+            let login_request = build_api_login_request(request)?;
+            self.run_api_key_login(state_dir, state, login_request)
+        } else if request.flags.contains("oauth") {
+            let autofill_request = build_autofill_request(request)?;
+            self.run_device_auth_login_autofill(state_dir, state, autofill_request)
         } else {
             self.run_device_auth_login(state_dir, state)
         }
@@ -90,11 +91,11 @@ impl AppAdapter for CodexAdapter {
         &self,
         state_dir: &Path,
         state: &mut State,
-        args: &crate::cli::AddArgs,
+        request: &AdapterCommandRequest,
     ) -> Result<AccountRecord> {
-        if args.api_args.api {
-            let request = build_api_login_request_from_add(args)?;
-            self.run_api_key_login(state_dir, state, request)
+        if request.flags.contains("api") {
+            let login_request = build_api_login_request(request)?;
+            self.run_api_key_login(state_dir, state, login_request)
         } else {
             self.run_device_auth_login(state_dir, state)
         }
@@ -102,6 +103,31 @@ impl AppAdapter for CodexAdapter {
 
     fn import_known_sources(&self, state_dir: &Path, state: &mut State) -> Vec<AccountRecord> {
         self.import_known_sources(state_dir, state)
+    }
+
+    fn find_current_account<'a>(
+        &self,
+        state: &'a State,
+        live: Option<&LiveIdentity>,
+    ) -> Option<&'a AccountRecord> {
+        policy::choose_current_account(state, live)
+    }
+
+    fn is_account_usable(
+        &self,
+        _state: &State,
+        record: &AccountRecord,
+        usage: &UsageSnapshot,
+    ) -> bool {
+        if record.is_api() {
+            true
+        } else {
+            policy::is_ranked_account_usable(usage)
+        }
+    }
+
+    fn select_best_account<'a>(&self, state: &'a State) -> Option<&'a AccountRecord> {
+        policy::choose_best_account(state)
     }
 
     fn find_account_by_email<'a>(
@@ -180,8 +206,12 @@ impl CodexAdapter {
         let home = codex_home();
         if let Some(account_id) = account::read_managed_config_account_id(&home) {
             return Some(LiveIdentity {
+                adapter_id: "codex".into(),
                 email: String::new(),
                 account_id: None,
+                stable_id: Some(account_id.clone()),
+                aliases: Vec::new(),
+                payload: serde_json::Value::Null,
                 scodex_account_id: Some(account_id),
             });
         }
@@ -387,7 +417,7 @@ impl CodexAdapter {
                 .read_line(&mut answer)
                 .context("failed to read confirmation input")?;
 
-            match parse_yes_no(&answer) {
+            match core_ui::parse_yes_no(&answer) {
                 Some(true) => {
                     let status = Command::new(&installer_bin)
                         .args(&install.args)
@@ -421,14 +451,6 @@ impl CodexAdapter {
             Err(_) => return false,
         };
         has_resumable_session_under(&sessions_root, &target)
-    }
-}
-
-pub(crate) fn parse_yes_no(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Some(true),
-        "n" | "no" => Some(false),
-        _ => None,
     }
 }
 
@@ -496,12 +518,15 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
-fn build_autofill_request(args: &crate::cli::LoginArgs) -> Result<AutofillRequest> {
+fn build_autofill_request(request: &AdapterCommandRequest) -> Result<AutofillRequest> {
     let ui = core_ui::messages();
-    if args.api_args.api {
+    if request.flags.contains("api") {
         bail!("{}", ui.login_mode_conflict());
     }
-    match (args.username.as_deref(), args.password.as_deref()) {
+    match (
+        request.options.get("username").map(String::as_str),
+        request.options.get("password").map(String::as_str),
+    ) {
         (Some(email), Some(password)) if !email.trim().is_empty() && !password.is_empty() => {
             Ok(AutofillRequest {
                 email: email.trim().to_string(),
@@ -512,23 +537,15 @@ fn build_autofill_request(args: &crate::cli::LoginArgs) -> Result<AutofillReques
     }
 }
 
-fn build_api_login_request(args: &crate::cli::LoginArgs) -> Result<ApiLoginRequest> {
-    build_api_login_request_parts(&args.api_args)
-}
-
-fn build_api_login_request_from_add(args: &crate::cli::AddArgs) -> Result<ApiLoginRequest> {
-    build_api_login_request_parts(&args.api_args)
-}
-
-fn build_api_login_request_parts(args: &crate::cli::ApiArgs) -> Result<ApiLoginRequest> {
+fn build_api_login_request(request: &AdapterCommandRequest) -> Result<ApiLoginRequest> {
     let ui = core_ui::messages();
-    let Some(api_token) = args.api_token.as_deref().map(str::trim) else {
+    let Some(api_token) = request.options.get("api_token").map(String::as_str).map(str::trim) else {
         bail!("{}", ui.login_api_missing_credentials());
     };
-    let Some(base_url) = args.base_url.as_deref().map(str::trim) else {
+    let Some(base_url) = request.options.get("base_url").map(String::as_str).map(str::trim) else {
         bail!("{}", ui.login_api_missing_credentials());
     };
-    let Some(provider) = args.provider.as_deref().map(str::trim) else {
+    let Some(provider) = request.options.get("provider").map(String::as_str).map(str::trim) else {
         bail!("{}", ui.login_api_missing_credentials());
     };
 
@@ -569,8 +586,8 @@ mod tests {
 
     use super::{
         ApiLoginRequest, CodexAdapter, build_codex_launch_command, has_resumable_session_under,
-        parse_yes_no,
     };
+    use crate::core::ui::parse_yes_no;
     use crate::core::state::{AccountType, State};
 
     #[test]

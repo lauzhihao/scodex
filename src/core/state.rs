@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT: f64 = 20.0;
 pub const STATE_VERSION: u32 = 1;
@@ -9,6 +10,12 @@ pub const STATE_VERSION: u32 = 1;
 pub struct AccountRecord {
     #[serde(default)]
     pub id: String,
+    #[serde(default)]
+    pub adapter_id: String,
+    #[serde(default)]
+    pub display_key: String,
+    #[serde(default)]
+    pub kind: String,
     #[serde(default)]
     pub account_type: AccountType,
     #[serde(default)]
@@ -27,6 +34,10 @@ pub struct AccountRecord {
     pub api_base_url: Option<String>,
     #[serde(default)]
     pub api_token_label: Option<String>,
+    #[serde(default = "default_payload_version")]
+    pub payload_version: u32,
+    #[serde(default)]
+    pub payload: Value,
     #[serde(default)]
     pub added_at: i64,
     #[serde(default)]
@@ -42,6 +53,16 @@ pub enum AccountType {
 }
 
 impl AccountRecord {
+    pub fn effective_display_key(&self) -> &str {
+        if !self.display_key.is_empty() {
+            &self.display_key
+        } else if !self.email.is_empty() {
+            &self.email
+        } else {
+            &self.id
+        }
+    }
+
     pub fn is_api(&self) -> bool {
         self.account_type == AccountType::Api
     }
@@ -71,14 +92,36 @@ pub struct UsageSnapshot {
     pub last_sync_error: Option<String>,
     #[serde(default)]
     pub needs_relogin: bool,
+    #[serde(default)]
+    pub rank_input: Option<AccountRankInput>,
+    #[serde(default)]
+    pub payload: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LiveIdentity {
+    #[serde(default)]
+    pub adapter_id: String,
     pub email: String,
     pub account_id: Option<String>,
     #[serde(default)]
+    pub stable_id: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
     pub scodex_account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AccountRankInput {
+    #[serde(default)]
+    pub keep_current_priority: i64,
+    #[serde(default)]
+    pub selection_priority: i64,
+    #[serde(default)]
+    pub freshness_priority: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -112,4 +155,8 @@ impl Default for State {
 
 const fn default_state_version() -> u32 {
     STATE_VERSION
+}
+
+const fn default_payload_version() -> u32 {
+    1
 }

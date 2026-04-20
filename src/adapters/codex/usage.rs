@@ -10,9 +10,13 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 
+use super::account::{codex_auth_path, codex_config_path, codex_plan};
 use super::auth::normalize_plan;
 use super::{CodexAdapter, now_ts};
-use crate::core::state::{AccountRecord, State, UsageSnapshot};
+use crate::core::state::{AccountRankInput, AccountRecord, State, UsageSnapshot};
+
+const CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT: i64 = 20;
+const MIN_WEEKLY_SELECTION_PERCENT: i64 = 5;
 
 const MAX_REFRESH_WORKERS: usize = 8;
 
@@ -62,8 +66,9 @@ impl CodexAdapter {
         account: &AccountRecord,
         previous: Option<&UsageSnapshot>,
     ) -> UsageSnapshot {
-        let auth_path = Path::new(&account.auth_path);
-        let config_path = account.config_path.as_ref().map(PathBuf::from);
+        let auth_path = codex_auth_path(account);
+        let auth_path = Path::new(&auth_path);
+        let config_path = codex_config_path(account).map(PathBuf::from);
         let timestamp = now_ts();
 
         let auth = match self.read_auth_json(auth_path) {
@@ -72,7 +77,7 @@ impl CodexAdapter {
                 return merge_usage_with_previous(
                     previous,
                     UsageSnapshot {
-                        plan: account.plan.clone(),
+                        plan: codex_plan(account),
                         last_synced_at: Some(timestamp),
                         last_sync_error: Some(error.to_string()),
                         ..UsageSnapshot::default()
@@ -100,7 +105,7 @@ impl CodexAdapter {
                 return merge_usage_with_previous(
                     previous,
                     UsageSnapshot {
-                        plan: account.plan.clone(),
+                        plan: codex_plan(account),
                         last_synced_at: Some(timestamp),
                         last_sync_error: Some("auth.json is missing tokens.access_token".into()),
                         ..UsageSnapshot::default()
@@ -133,7 +138,7 @@ impl CodexAdapter {
                 return merge_usage_with_previous(
                     previous,
                     UsageSnapshot {
-                        plan: account.plan.clone(),
+                        plan: codex_plan(account),
                         last_synced_at: Some(timestamp),
                         last_sync_error: Some(error.to_string()),
                         ..UsageSnapshot::default()
@@ -146,7 +151,7 @@ impl CodexAdapter {
             return merge_usage_with_previous(
                 previous,
                 UsageSnapshot {
-                    plan: account.plan.clone(),
+                    plan: codex_plan(account),
                     last_synced_at: Some(timestamp),
                     last_sync_error: Some(
                         "Codex OAuth token expired or invalid. Run `codex login` again.".into(),
@@ -160,7 +165,7 @@ impl CodexAdapter {
             return merge_usage_with_previous(
                 previous,
                 UsageSnapshot {
-                    plan: account.plan.clone(),
+                    plan: codex_plan(account),
                     last_synced_at: Some(timestamp),
                     last_sync_error: Some(format!("GET {url} failed: {}", response.status())),
                     ..UsageSnapshot::default()
@@ -174,7 +179,7 @@ impl CodexAdapter {
                 return merge_usage_with_previous(
                     previous,
                     UsageSnapshot {
-                        plan: account.plan.clone(),
+                        plan: codex_plan(account),
                         last_synced_at: Some(timestamp),
                         last_sync_error: Some(error.to_string()),
                         ..UsageSnapshot::default()
@@ -187,6 +192,7 @@ impl CodexAdapter {
         normalized.last_synced_at = Some(timestamp);
         normalized.last_sync_error = None;
         normalized.needs_relogin = false;
+        normalized.rank_input = build_rank_input(&normalized);
         normalized
     }
 }
@@ -314,6 +320,8 @@ fn merge_usage_with_previous(
         }
         merged.last_sync_error = update.last_sync_error;
         merged.needs_relogin = update.needs_relogin;
+        merged.rank_input = update.rank_input;
+        merged.payload = update.payload;
         return merged;
     }
     update
@@ -426,6 +434,48 @@ fn normalize_usage_response(payload: &Value) -> UsageSnapshot {
         weekly_refresh_at: weekly.and_then(|item| item.reset_at),
         credits_balance,
         ..UsageSnapshot::default()
+    }
+}
+
+fn build_rank_input(usage: &UsageSnapshot) -> Option<AccountRankInput> {
+    let five_hour = usage.five_hour_remaining_percent?;
+    let weekly = usage.weekly_remaining_percent?;
+    if weekly <= MIN_WEEKLY_SELECTION_PERCENT {
+        return None;
+    }
+
+    let keep_current_priority = if five_hour >= CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT {
+        1
+    } else {
+        0
+    };
+    if keep_current_priority == 0 {
+        return None;
+    }
+
+    Some(AccountRankInput {
+        keep_current_priority,
+        selection_priority: quota_score(five_hour) * 100 + quota_score(weekly),
+        freshness_priority: -parse_refresh_ts(&usage.weekly_refresh_at),
+    })
+}
+
+fn quota_score(value: i64) -> i64 {
+    match value {
+        p if p >= 75 => 4,
+        p if p >= 50 => 3,
+        p if p >= 20 => 2,
+        _ => 1,
+    }
+}
+
+fn parse_refresh_ts(value: &Option<String>) -> i64 {
+    match value
+        .as_deref()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+    {
+        Some(dt) => dt.timestamp(),
+        None => i64::MIN / 2,
     }
 }
 

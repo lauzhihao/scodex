@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::ApiLoginRequest;
@@ -15,6 +17,76 @@ use crate::core::storage;
 
 const SCODEX_API_CONFIG_MARKER: &str = "# scodex-managed-api-config";
 const SCODEX_ACCOUNT_ID_PREFIX: &str = "# scodex-account-id: ";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+struct CodexAccountPayload {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    plan: Option<String>,
+    #[serde(default)]
+    auth_path: String,
+    #[serde(default)]
+    config_path: Option<String>,
+    #[serde(default)]
+    api_provider: Option<String>,
+    #[serde(default)]
+    api_base_url: Option<String>,
+    #[serde(default)]
+    api_token_label: Option<String>,
+}
+
+pub(super) fn codex_email(account: &AccountRecord) -> String {
+    decode_payload(account)
+        .map(|payload| payload.email)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| account.email.clone())
+}
+
+pub(super) fn codex_account_id(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.account_id)
+        .or_else(|| account.account_id.clone())
+}
+
+pub(super) fn codex_plan(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.plan)
+        .or_else(|| account.plan.clone())
+}
+
+pub(super) fn codex_auth_path(account: &AccountRecord) -> String {
+    decode_payload(account)
+        .map(|payload| payload.auth_path)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| account.auth_path.clone())
+}
+
+pub(super) fn codex_config_path(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.config_path)
+        .or_else(|| account.config_path.clone())
+}
+
+pub(super) fn codex_api_provider(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.api_provider)
+        .or_else(|| account.api_provider.clone())
+}
+
+pub(super) fn codex_api_base_url(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.api_base_url)
+        .or_else(|| account.api_base_url.clone())
+}
+
+pub(super) fn codex_api_token_label(account: &AccountRecord) -> Option<String> {
+    decode_payload(account)
+        .and_then(|payload| payload.api_token_label)
+        .or_else(|| account.api_token_label.clone())
+}
 
 impl CodexAdapter {
     pub fn normalize_account_records(&self, state: &mut State) -> bool {
@@ -87,8 +159,11 @@ impl CodexAdapter {
         };
 
         let timestamp = now_ts();
-        let record = AccountRecord {
+        let mut record = AccountRecord {
             id: account_id,
+            adapter_id: "codex".into(),
+            display_key: identity.email.clone(),
+            kind: "subscription".into(),
             account_type: AccountType::Subscription,
             email: identity.email,
             account_id: identity.account_id,
@@ -98,9 +173,12 @@ impl CodexAdapter {
             api_provider: None,
             api_base_url: None,
             api_token_label: None,
+            payload_version: 1,
+            payload: Value::Null,
             added_at: existing.map(|item| item.added_at).unwrap_or(timestamp),
             updated_at: timestamp,
         };
+        sync_payload_from_legacy_fields(&mut record);
 
         replace_account(state, record.clone());
         Ok(record)
@@ -120,7 +198,7 @@ impl CodexAdapter {
         let existing = state
             .accounts
             .iter()
-            .find(|account| account.email.eq_ignore_ascii_case(&email));
+            .find(|account| codex_email(account).eq_ignore_ascii_case(&email));
         let account_id = existing
             .map(|item| item.id.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -138,8 +216,11 @@ impl CodexAdapter {
         .with_context(|| format!("failed to write {}", stored_config_path.display()))?;
 
         let timestamp = now_ts();
-        let record = AccountRecord {
+        let mut record = AccountRecord {
             id: account_id,
+            adapter_id: "codex".into(),
+            display_key: email.clone(),
+            kind: "api".into(),
             account_type: AccountType::Api,
             email,
             account_id: None,
@@ -149,9 +230,12 @@ impl CodexAdapter {
             api_provider: Some(request.provider.clone()),
             api_base_url: Some(request.base_url.clone()),
             api_token_label: Some(api_token_label(&request.api_token)),
+            payload_version: 1,
+            payload: Value::Null,
             added_at: existing.map(|item| item.added_at).unwrap_or(timestamp),
             updated_at: timestamp,
         };
+        sync_payload_from_legacy_fields(&mut record);
 
         replace_account(state, record.clone());
         Ok(record)
@@ -218,11 +302,12 @@ impl CodexAdapter {
         state
             .accounts
             .iter()
-            .find(|account| account.email.eq_ignore_ascii_case(&target))
+            .find(|account| codex_email(account).eq_ignore_ascii_case(&target))
     }
 
     pub fn switch_account(&self, account: &AccountRecord) -> Result<()> {
-        let src = Path::new(&account.auth_path);
+        let auth_path = codex_auth_path(account);
+        let src = Path::new(&auth_path);
         storage::ensure_exists(src, "stored auth.json")?;
         let home = codex_home();
         let dst = home.join("auth.json");
@@ -335,17 +420,17 @@ pub(super) fn read_managed_config_account_id(codex_home: &Path) -> Option<String
 
 fn switch_config(codex_home: &Path, account: &AccountRecord) -> Result<()> {
     if account.is_api() {
-        let Some(config_path) = account.config_path.as_ref() else {
+        let Some(config_path) = codex_config_path(account) else {
             return Ok(());
         };
-        let src = Path::new(config_path);
+        let src = Path::new(&config_path);
         storage::ensure_exists(src, "stored config.toml")?;
         backup_user_config_if_needed(codex_home)?;
         return atomic_copy(src, &codex_home.join("config.toml"));
     }
 
-    if let Some(config_path) = account.config_path.as_ref() {
-        let src = Path::new(config_path);
+    if let Some(config_path) = codex_config_path(account) {
+        let src = Path::new(&config_path);
         if src.exists() {
             backup_user_config_if_needed(codex_home)?;
             return atomic_copy(src, &codex_home.join("config.toml"));
@@ -427,8 +512,8 @@ fn find_matching_account<'a>(
     account_id: Option<&str>,
 ) -> Option<&'a AccountRecord> {
     state.accounts.iter().find(|account| {
-        account.email.eq_ignore_ascii_case(email)
-            || account_id.is_some_and(|candidate| account.account_id.as_deref() == Some(candidate))
+        codex_email(account).eq_ignore_ascii_case(email)
+            || account_id.is_some_and(|candidate| codex_account_id(account).as_deref() == Some(candidate))
     })
 }
 
@@ -467,47 +552,131 @@ fn env_flag_enabled(name: &str) -> bool {
 }
 
 fn normalize_account_record(account: &mut AccountRecord) -> bool {
-    let Some(api_details) = infer_api_account_details(account) else {
+    let mut changed = false;
+    if apply_payload_to_legacy_fields(account) {
+        changed = true;
+    }
+
+    if let Some(api_details) = infer_api_account_details(account) {
+        if account.account_type != AccountType::Api {
+            account.account_type = AccountType::Api;
+            changed = true;
+        }
+        if account.account_id.take().is_some() {
+            changed = true;
+        }
+        if account.plan.take().is_some() {
+            changed = true;
+        }
+        if account.email != api_details.email {
+            account.email = api_details.email;
+            changed = true;
+        }
+        if account.api_provider.as_deref() != Some(api_details.provider.as_str()) {
+            account.api_provider = Some(api_details.provider);
+            changed = true;
+        }
+        if account.api_base_url.as_deref() != Some(api_details.base_url.as_str()) {
+            account.api_base_url = Some(api_details.base_url);
+            changed = true;
+        }
+        if account.api_token_label.as_deref() != Some(api_details.token_label.as_str()) {
+            account.api_token_label = Some(api_details.token_label);
+            changed = true;
+        }
+    }
+
+    if sync_payload_from_legacy_fields(account) {
+        changed = true;
+    }
+
+    changed
+}
+
+fn apply_payload_to_legacy_fields(account: &mut AccountRecord) -> bool {
+    let Some(payload) = decode_payload(account) else {
         return false;
     };
 
     let mut changed = false;
-    if account.account_type != AccountType::Api {
-        account.account_type = AccountType::Api;
+    if !payload.email.is_empty() && account.email != payload.email {
+        account.email = payload.email.clone();
         changed = true;
     }
-    if account.account_id.take().is_some() {
+    if account.account_id != payload.account_id {
+        account.account_id = payload.account_id.clone();
         changed = true;
     }
-    if account.plan.take().is_some() {
+    if account.plan != payload.plan {
+        account.plan = payload.plan.clone();
         changed = true;
     }
-    if account.email != api_details.email {
-        account.email = api_details.email;
+    if !payload.auth_path.is_empty() && account.auth_path != payload.auth_path {
+        account.auth_path = payload.auth_path.clone();
         changed = true;
     }
-    if account.api_provider.as_deref() != Some(api_details.provider.as_str()) {
-        account.api_provider = Some(api_details.provider);
+    if account.config_path != payload.config_path {
+        account.config_path = payload.config_path.clone();
         changed = true;
     }
-    if account.api_base_url.as_deref() != Some(api_details.base_url.as_str()) {
-        account.api_base_url = Some(api_details.base_url);
+    if account.api_provider != payload.api_provider {
+        account.api_provider = payload.api_provider.clone();
         changed = true;
     }
-    if account.api_token_label.as_deref() != Some(api_details.token_label.as_str()) {
-        account.api_token_label = Some(api_details.token_label);
+    if account.api_base_url != payload.api_base_url {
+        account.api_base_url = payload.api_base_url.clone();
+        changed = true;
+    }
+    if account.api_token_label != payload.api_token_label {
+        account.api_token_label = payload.api_token_label.clone();
+        changed = true;
+    }
+    if account.display_key.is_empty() && !payload.email.is_empty() {
+        account.display_key = payload.email.clone();
         changed = true;
     }
     changed
 }
 
+fn sync_payload_from_legacy_fields(account: &mut AccountRecord) -> bool {
+    account.adapter_id = "codex".into();
+    if account.display_key.is_empty() {
+        account.display_key = account.email.clone();
+    }
+    if account.kind.is_empty() {
+        account.kind = if account.is_api() { "api" } else { "subscription" }.into();
+    }
+
+    let payload = CodexAccountPayload {
+        email: account.email.clone(),
+        account_id: account.account_id.clone(),
+        plan: account.plan.clone(),
+        auth_path: account.auth_path.clone(),
+        config_path: account.config_path.clone(),
+        api_provider: account.api_provider.clone(),
+        api_base_url: account.api_base_url.clone(),
+        api_token_label: account.api_token_label.clone(),
+    };
+    let value = serde_json::to_value(payload).unwrap_or(Value::Null);
+    let changed = account.payload != value || account.payload_version != 1;
+    account.payload_version = 1;
+    account.payload = value;
+    changed
+}
+
+fn decode_payload(account: &AccountRecord) -> Option<CodexAccountPayload> {
+    serde_json::from_value(account.payload.clone()).ok()
+}
+
 fn infer_api_account_details(account: &AccountRecord) -> Option<InferredApiAccount> {
-    let config_path = account.config_path.as_deref().map(Path::new)?;
+    let config_path = codex_config_path(account)?;
+    let config_path = Path::new(&config_path);
     if !config_path.exists() || !is_scodex_managed_config(config_path) {
         return None;
     }
 
-    let auth_path = Path::new(&account.auth_path);
+    let auth_path = codex_auth_path(account);
+    let auth_path = Path::new(&auth_path);
     let auth = fs::read_to_string(auth_path)
         .ok()
         .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())?;

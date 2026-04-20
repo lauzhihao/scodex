@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -20,12 +21,27 @@ pub struct AdapterCapabilities {
     pub live_usage: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdapterCommandRequest {
+    pub mode: Option<String>,
+    pub flags: BTreeSet<String>,
+    pub options: BTreeMap<String, String>,
+}
+
 pub trait CliAdapter {
     fn id(&self) -> &'static str;
     fn capabilities(&self) -> AdapterCapabilities;
 }
 
-pub trait AppAdapter {
+pub trait AppAdapter: CliAdapter {
+    fn adapter_id(&self) -> &'static str {
+        self.id()
+    }
+
+    fn adapter_capabilities(&self) -> AdapterCapabilities {
+        self.capabilities()
+    }
+
     fn display_name(&self) -> &'static str;
 
     fn normalize_account_records(&self, state: &mut State) -> bool;
@@ -33,16 +49,28 @@ pub trait AppAdapter {
         &self,
         state_dir: &Path,
         state: &mut State,
-        args: &crate::cli::LoginArgs,
+        request: &AdapterCommandRequest,
     ) -> Result<AccountRecord>;
     fn login_default(&self, state_dir: &Path, state: &mut State) -> Result<AccountRecord>;
     fn handle_add(
         &self,
         state_dir: &Path,
         state: &mut State,
-        args: &crate::cli::AddArgs,
+        request: &AdapterCommandRequest,
     ) -> Result<AccountRecord>;
     fn import_known_sources(&self, state_dir: &Path, state: &mut State) -> Vec<AccountRecord>;
+    fn find_current_account<'a>(
+        &self,
+        state: &'a State,
+        live: Option<&LiveIdentity>,
+    ) -> Option<&'a AccountRecord>;
+    fn is_account_usable(
+        &self,
+        state: &State,
+        record: &AccountRecord,
+        usage: &UsageSnapshot,
+    ) -> bool;
+    fn select_best_account<'a>(&self, state: &'a State) -> Option<&'a AccountRecord>;
     fn find_account_by_email<'a>(
         &self,
         state: &'a State,

@@ -9,6 +9,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, rand_core::RngCore};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -22,6 +23,10 @@ pub const BUNDLE_KEY_ENV: &str = "SCODEX_POOL_KEY";
 const BUNDLE_DIR_ENV: &str = "SCODEX_POOL_PATH";
 const LEGACY_BUNDLE_DIR_ENVS: [&str; 2] = ["AUTO_CODEX_POOL_PATH", "CODEX_AUTOSWITCH_POOL_PATH"];
 const BUNDLE_ALGORITHM: &str = "xchacha20poly1305-sha256";
+
+const fn default_payload_version() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct PushOutcome {
@@ -45,6 +50,12 @@ struct RepoBundle {
 struct RepoBundleAccount {
     id: String,
     #[serde(default)]
+    adapter_id: String,
+    #[serde(default)]
+    display_key: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
     account_type: AccountType,
     email: String,
     account_id: Option<String>,
@@ -55,6 +66,10 @@ struct RepoBundleAccount {
     api_base_url: Option<String>,
     #[serde(default)]
     api_token_label: Option<String>,
+    #[serde(default = "default_payload_version")]
+    payload_version: u32,
+    #[serde(default)]
+    payload: Value,
     added_at: i64,
     updated_at: i64,
     auth_json: String,
@@ -239,6 +254,9 @@ fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
 
     Ok(RepoBundleAccount {
         id: account.id.clone(),
+        adapter_id: account.adapter_id.clone(),
+        display_key: account.display_key.clone(),
+        kind: account.kind.clone(),
         account_type: account.account_type,
         email: account.email.clone(),
         account_id: account.account_id.clone(),
@@ -246,6 +264,8 @@ fn export_account_bundle(account: &AccountRecord) -> Result<RepoBundleAccount> {
         api_provider: account.api_provider.clone(),
         api_base_url: account.api_base_url.clone(),
         api_token_label: account.api_token_label.clone(),
+        payload_version: account.payload_version,
+        payload: account.payload.clone(),
         added_at: account.added_at,
         updated_at: account.updated_at,
         auth_json,
@@ -373,6 +393,9 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
 
         records.push(AccountRecord {
             id: account.id.clone(),
+            adapter_id: account.adapter_id.clone(),
+            display_key: account.display_key.clone(),
+            kind: account.kind.clone(),
             account_type: account.account_type,
             email: account.email.clone(),
             account_id: account.account_id.clone(),
@@ -382,6 +405,8 @@ fn overwrite_local_account_pool(state_dir: &Path, bundle: &RepoBundle) -> Result
             api_provider: account.api_provider.clone(),
             api_base_url: account.api_base_url.clone(),
             api_token_label: account.api_token_label.clone(),
+            payload_version: account.payload_version,
+            payload: account.payload.clone(),
             added_at: account.added_at,
             updated_at: account.updated_at,
         });
@@ -733,6 +758,9 @@ mod tests {
             exported_at: 1,
             accounts: vec![RepoBundleAccount {
                 id: "acct-1".into(),
+                adapter_id: "codex".into(),
+                display_key: "a@example.com".into(),
+                kind: "subscription".into(),
                 account_type: AccountType::Subscription,
                 email: "a@example.com".into(),
                 account_id: Some("acct-remote-1".into()),
@@ -740,6 +768,8 @@ mod tests {
                 api_provider: None,
                 api_base_url: None,
                 api_token_label: None,
+                payload_version: 1,
+                payload: serde_json::Value::Null,
                 added_at: 1,
                 updated_at: 2,
                 auth_json: "{\"tokens\":{}}".into(),
@@ -796,6 +826,9 @@ mod tests {
             exported_at: 1,
             accounts: vec![RepoBundleAccount {
                 id: "acct-2".into(),
+                adapter_id: "codex".into(),
+                display_key: "api@example.com".into(),
+                kind: "api".into(),
                 account_type: AccountType::Api,
                 email: "api@example.com".into(),
                 account_id: None,
@@ -803,6 +836,8 @@ mod tests {
                 api_provider: Some("openai".into()),
                 api_base_url: Some("https://api.openai.com/v1".into()),
                 api_token_label: Some("sk-...abcd".into()),
+                payload_version: 1,
+                payload: serde_json::Value::Null,
                 added_at: 3,
                 updated_at: 4,
                 auth_json: "{\"OPENAI_API_KEY\":\"sk-test\"}".into(),

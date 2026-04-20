@@ -1,19 +1,9 @@
-mod adapters;
-mod cli;
-mod core;
-
 fn main() {
-    match run() {
+    match s_core::run_codex_cli() {
         Ok(code) => std::process::exit(code),
         Err(error) => {
-            eprintln!("{}", core::ui::format_top_level_error(&error));
+            eprintln!("{}", s_core::core::ui::format_top_level_error(&error));
             std::process::exit(1);
         }
     }
-}
-
-fn run() -> anyhow::Result<i32> {
-    let cli = cli::Cli::parse_args();
-    let adapter = adapters::codex::CodexAdapter::default();
-    cli::run(cli, adapter)
 }

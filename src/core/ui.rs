@@ -64,6 +64,14 @@ pub fn format_top_level_error(error: &Error) -> String {
     }
 }
 
+pub fn parse_yes_no(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "n" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 impl Messages {
     pub fn is_zh(&self) -> bool {
         matches!(self.language, UiLanguage::ZhHans)
@@ -266,9 +274,9 @@ impl Messages {
 
     pub fn login_start(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动 `codex login --device-auth`。"
+            "正在启动底层 CLI 的设备授权登录流程。"
         } else {
-            "Starting `codex login --device-auth`."
+            "Starting the underlying CLI device-auth login flow."
         }
     }
 
@@ -290,9 +298,9 @@ impl Messages {
 
     pub fn resume_session(&self) -> &'static str {
         if self.is_zh() {
-            "正在恢复当前目录的最新 Codex 会话。"
+            "正在恢复当前目录的最近一次 CLI 会话。"
         } else {
-            "Resuming latest Codex session for this directory."
+            "Resuming the latest CLI session for this directory."
         }
     }
 
@@ -300,39 +308,39 @@ impl Messages {
         if self.is_zh() {
             "恢复会话未能正常完成，正在回退到新会话。"
         } else {
-            "Resume did not complete cleanly; falling back to a fresh Codex session."
+            "Resume did not complete cleanly; falling back to a fresh CLI session."
         }
     }
 
     pub fn fresh_session(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动新的 Codex 会话。"
+            "正在启动新的 CLI 会话。"
         } else {
-            "Starting a fresh Codex session."
+            "Starting a fresh CLI session."
         }
     }
 
     pub fn missing_codex(&self) -> &'static str {
         if self.is_zh() {
-            "未找到 codex。这会导致 scodex 无法正常工作。"
+            "未找到底层 CLI 可执行文件。这会导致当前包装器无法正常工作。"
         } else {
-            "codex not found. This will cause scodex to behave incorrectly."
+            "The underlying CLI executable was not found. The wrapper cannot function correctly."
         }
     }
 
     pub fn install_hint(&self) -> &'static str {
         if self.is_zh() {
-            "你可以先运行下面的命令安装 Codex CLI："
+            "你可以先运行下面的命令安装底层 CLI："
         } else {
-            "You can install Codex CLI by running:"
+            "You can install the underlying CLI by running:"
         }
     }
 
     pub fn manual_install(&self) -> &'static str {
         if self.is_zh() {
-            "请先手动安装 Codex CLI，然后重新运行 scodex。"
+            "请先手动安装底层 CLI，然后重新运行当前包装器。"
         } else {
-            "Please install Codex CLI manually and run scodex again."
+            "Please install the underlying CLI manually and run the wrapper again."
         }
     }
 
@@ -354,35 +362,35 @@ impl Messages {
 
     pub fn codex_install_still_missing(&self) -> &'static str {
         if self.is_zh() {
-            "Codex 安装似乎已完成，但当前仍然找不到 `codex`。请重启 shell，或显式设置 CODEX_BIN。"
+            "安装似乎已完成，但当前仍然找不到底层 CLI。请重启 shell，或显式设置对应的可执行文件路径环境变量。"
         } else {
-            "Codex installation completed, but `codex` is still not available. Restart the shell or set CODEX_BIN explicitly."
+            "Installation completed, but the underlying CLI is still not available. Restart the shell or set the executable path explicitly."
         }
     }
 
     pub fn codex_install_failed(&self, status: i32) -> String {
         if self.is_zh() {
-            format!("Codex 安装失败，退出码：{status}")
+            format!("底层 CLI 安装失败，退出码：{status}")
         } else {
-            format!("Codex installation failed with status {status}")
+            format!("Underlying CLI installation failed with status {status}")
         }
     }
 
     pub fn codex_install_tool_missing(&self, tool: &str) -> String {
         if self.is_zh() {
-            format!("未找到 {tool}。要自动安装 Codex CLI，当前机器需要先安装 Node.js/npm。")
+            format!("未找到 {tool}。要自动安装底层 CLI，当前机器需要先满足对应安装前置条件。")
         } else {
             format!(
-                "{tool} not found. Install Node.js/npm first before trying to install Codex CLI automatically."
+                "{tool} not found. Install the prerequisite toolchain before trying to install the underlying CLI automatically."
             )
         }
     }
 
     pub fn codex_login_failed(&self, status: i32) -> String {
         if self.is_zh() {
-            format!("codex 登录失败，退出码：{status}")
+            format!("底层 CLI 登录失败，退出码：{status}")
         } else {
-            format!("codex login failed with status {status}")
+            format!("Underlying CLI login failed with status {status}")
         }
     }
 
@@ -396,9 +404,9 @@ impl Messages {
 
     pub fn login_autofill_start(&self) -> &'static str {
         if self.is_zh() {
-            "正在启动 `codex login` 并打开受控 Chrome 完成 OAuth 自动填充。"
+            "正在启动底层 CLI 登录流程，并打开受控 Chrome 完成 OAuth 自动填充。"
         } else {
-            "Starting `codex login` and opening a controlled Chrome window for OAuth auto-fill."
+            "Starting the underlying CLI login flow and opening a controlled Chrome window for OAuth auto-fill."
         }
     }
 
@@ -453,17 +461,17 @@ impl Messages {
 
     pub fn deploy_start(&self, target: &str) -> String {
         if self.is_zh() {
-            format!("正在把当前 Codex 凭证上传到 {target}")
+            format!("正在把当前凭证上传到 {target}")
         } else {
-            format!("Deploying the current Codex credential to {target}")
+            format!("Deploying the current credential to {target}")
         }
     }
 
     pub fn deploy_completed(&self, target: &str) -> String {
         if self.is_zh() {
-            format!("已把当前 Codex 凭证上传到 {target}")
+            format!("已把当前凭证上传到 {target}")
         } else {
-            format!("Deployed the current Codex credential to {target}")
+            format!("Deployed the current credential to {target}")
         }
     }
 

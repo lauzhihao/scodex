@@ -6,6 +6,10 @@ rust-version = "1.85"
 license = "MIT"
 description = "Cross-platform account-aware launcher for agent CLIs."
 
+[lib]
+name = "s_core"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
-use crate::adapters::AppAdapter;
+use crate::adapters::{AdapterCommandRequest, AppAdapter};
 use crate::core::engine;
 use crate::core::state::{AccountRecord, UsageSnapshot};
 use crate::core::storage;
@@ -235,16 +235,18 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
             }
         }
         Command::Login(args) => {
-            let record = adapter.handle_login(&state_dir, &mut state, &args)?;
+            let request = build_login_request(&args);
+            let record = adapter.handle_login(&state_dir, &mut state, &request)?;
             finish_added_account(&adapter, &state_dir, &mut state, &record)?
         }
         Command::Add(args) => {
-            let record = adapter.handle_add(&state_dir, &mut state, &args)?;
+            let request = build_add_request(&args);
+            let record = adapter.handle_add(&state_dir, &mut state, &request)?;
             finish_added_account(&adapter, &state_dir, &mut state, &record)?
         }
         Command::Use(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
-            let Some(record) = engine::find_account_by_email(&state, &args.email) else {
+            let Some(record) = adapter.find_account_by_email(&state, &args.email) else {
                 println!("{}", ui.unknown_account(&args.email));
                 storage::save_state(&state_dir, &state)?;
                 return Ok(1);
@@ -261,8 +263,9 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
         }
         Command::Rm(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
-            let Some((id, email)) = engine::find_account_by_email(&state, &args.email)
-                .map(|record| (record.id.clone(), record.email.clone()))
+            let Some((id, display_key)) = adapter
+                .find_account_by_email(&state, &args.email)
+                .map(|record| (record.id.clone(), record.effective_display_key().to_string()))
             else {
                 println!("{}", ui.unknown_account(&args.email));
                 storage::save_state(&state_dir, &state)?;
@@ -275,11 +278,11 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
                     return Ok(1);
                 }
                 loop {
-                    print!("{}", ui.confirm_rm(&email));
+                    print!("{}", ui.confirm_rm(&display_key));
                     let _ = io::stdout().flush();
                     let mut line = String::new();
                     io::stdin().read_line(&mut line)?;
-                    match crate::adapters::codex::parse_yes_no(&line) {
+                    match ui::parse_yes_no(&line) {
                         Some(true) => break,
                         Some(false) => {
                             println!("{}", ui.rm_cancelled());
@@ -291,7 +294,7 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
             }
             adapter.remove_account(&state_dir, &mut state, &id)?;
             storage::save_state(&state_dir, &state)?;
-            println!("{}", ui.removed_account(&email));
+            println!("{}", ui.removed_account(&display_key));
             0
         }
         Command::Deploy(args) => {
@@ -384,7 +387,7 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
         Command::ImportAuth(args) => {
             let record = adapter.handle_import_auth(&state_dir, &mut state, &args.path)?;
             storage::save_state(&state_dir, &state)?;
-            println!("{}", ui.imported_account(&record.email, &record.id));
+            println!("{}", ui.imported_account(record.effective_display_key(), &record.id));
             0
         }
         Command::ImportKnown => {
@@ -396,7 +399,10 @@ pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
             }
             storage::save_state(&state_dir, &state)?;
             for account in imported {
-                println!("{}", ui.imported_account(&account.email, &account.id));
+                println!(
+                    "{}",
+                    ui.imported_account(account.effective_display_key(), &account.id)
+                );
             }
             0
         }
@@ -434,7 +440,7 @@ fn finish_added_account<A: AppAdapter>(
 ) -> Result<i32> {
     let ui = ui::messages();
     let usage = adapter.refresh_usage(state, record);
-    println!("{}", ui.added_account(&record.email));
+    println!("{}", ui.added_account(record.effective_display_key()));
     adapter.switch_account(record)?;
     print_selection(ui.selection_switched(), record, &usage);
     storage::save_state(state_dir, state)?;
@@ -500,10 +506,59 @@ fn print_selection(prefix: &str, account: &AccountRecord, usage: &UsageSnapshot)
     println!(
         "{} {} [weekly={}, 5h={}]",
         prefix,
-        account.email,
+        account.effective_display_key(),
         format_percent(usage.weekly_remaining_percent),
         format_percent(usage.five_hour_remaining_percent),
     );
+}
+
+fn build_login_request(args: &LoginArgs) -> AdapterCommandRequest {
+    let mut request = AdapterCommandRequest::default();
+    if args.api_args.api {
+        request.mode = Some("api".into());
+        request.flags.insert("api".into());
+    }
+    if args.oauth {
+        request.mode = Some("oauth".into());
+        request.flags.insert("oauth".into());
+    }
+    if let Some(value) = args.api_args.api_token.as_deref() {
+        request.options.insert("api_token".into(), value.to_string());
+    }
+    if let Some(value) = args.api_args.base_url.as_deref() {
+        request.options.insert("base_url".into(), value.to_string());
+    }
+    if let Some(value) = args.api_args.provider.as_deref() {
+        request.options.insert("provider".into(), value.to_string());
+    }
+    if let Some(value) = args.username.as_deref() {
+        request.options.insert("username".into(), value.to_string());
+    }
+    if let Some(value) = args.password.as_deref() {
+        request.options.insert("password".into(), value.to_string());
+    }
+    request
+}
+
+fn build_add_request(args: &AddArgs) -> AdapterCommandRequest {
+    let mut request = AdapterCommandRequest::default();
+    if args.api_args.api {
+        request.mode = Some("api".into());
+        request.flags.insert("api".into());
+    }
+    if args.switch {
+        request.flags.insert("switch".into());
+    }
+    if let Some(value) = args.api_args.api_token.as_deref() {
+        request.options.insert("api_token".into(), value.to_string());
+    }
+    if let Some(value) = args.api_args.base_url.as_deref() {
+        request.options.insert("base_url".into(), value.to_string());
+    }
+    if let Some(value) = args.api_args.provider.as_deref() {
+        request.options.insert("provider".into(), value.to_string());
+    }
+    request
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

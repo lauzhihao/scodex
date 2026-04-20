@@ -51,7 +51,7 @@ pub fn load_state(state_dir: &Path) -> Result<State> {
         .with_context(|| format!("failed to read {}", state_file.display()))?;
     let mut state: State = serde_json::from_str(&contents)
         .with_context(|| format!("invalid state file: {}", state_file.display()))?;
-    normalize_state_account_paths(state_dir, &mut state);
+    let _ = normalize_state_account_paths(state_dir, &mut state);
     Ok(state)
 }
 

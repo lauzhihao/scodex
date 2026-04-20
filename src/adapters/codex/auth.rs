@@ -82,8 +82,12 @@ pub(super) struct LiveIdentityWithPlan {
 impl From<LiveIdentityWithPlan> for LiveIdentity {
     fn from(value: LiveIdentityWithPlan) -> Self {
         Self {
+            adapter_id: "codex".into(),
             email: value.email,
             account_id: value.account_id,
+            stable_id: None,
+            aliases: Vec::new(),
+            payload: Value::Null,
             scodex_account_id: None,
         }
     }

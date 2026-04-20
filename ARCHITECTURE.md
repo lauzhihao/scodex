@@ -69,6 +69,14 @@ Phase 2 adds new adapters one by one.
 - `OpenCodeAdapter` is the first candidate after Codex because its auth/config surface is comparatively explicit
 - `ClaudeCodeAdapter` and `GeminiCliAdapter` should only move past proof-of-concept after identity switching and usage semantics are validated
 
+The current repository now also includes a stricter target-state blueprint for
+the next refactor phase:
+
+- `ADAPTER_FRAMEWORK_V2.md`
+
+That document defines how this codebase should evolve into a reusable
+`s-core` style framework plus per-tool adapter crates.
+
 ## Repository mapping
 
 - installer and shell integration live in `install.sh` and `install.ps1`
