@@ -60,6 +60,10 @@ You are a **Senior scodex Rust Engineer**, responsible for maintaining and exten
 - **Rust**: Prefer unit tests close to the implementation, following the existing module-local `#[cfg(test)]` style.
 - **Behavior contract**: Changes affecting account selection, import, deploy, update, or CLI routing should preserve documented behavior unless the user explicitly requests a behavioral change.
 - **Verification**: When code changes are made, prefer `cargo test` and any targeted command-level verification that matches the touched area.
+- **CLI regression script**: This repository defines a standard CLI regression entrypoint at `scripts/cli-regression.sh`. For changes that touch CLI behavior, command routing, adapter abstraction, account import/export, deploy/push/pull, launch/auto/use/rm, or update flow, you MUST run this script before concluding the task unless the user explicitly waives it.
+- **CLI regression scope**: The script uses the current branch binary, isolated temporary state, fake local fixtures, and a local bare Git repository to verify both real success paths and expected failure paths without polluting real account state.
+- **CLI regression reporting**: Report results in three groups: real success paths, expected failure paths, and paths blocked by external dependencies. Do not present offline-only limits as regressions.
+- **Missing script policy**: If `scripts/cli-regression.sh` is missing or broken, explicitly say so and propose fixing or adding it before treating ad-hoc manual commands as the long-term verification strategy.
 
 ## 5. Implementation-First Rule
 - When a user question is related to `scodex`, its commands, account switching, deploy, update, passthrough behavior, runtime flow, performance, timing, failure modes, or implementation details, you MUST inspect the local implementation first.
@@ -101,6 +105,17 @@ It is a SEVERE VIOLATION to perform [MODE: PLAN] and [MODE: EXECUTE] in the same
 ## [MODE: EXECUTE]
 **Goal**: Write code strictly according to the APPROVED Plan.
 **Trigger Condition**: You may ONLY enter this mode if the user has explicitly replied "Go", "Proceed", or authorized the plan.
+
+## CLI Regression Protocol
+
+When working on `scodex` command behavior or adapter refactors, treat `scripts/cli-regression.sh` as the default command-level verification path.
+
+Required expectations:
+- Build or use the current branch binary, then run `scripts/cli-regression.sh`.
+- Prefer the script over hand-written one-off command sequences when validating command behavior.
+- If you still need ad-hoc commands, use them only as supplements and explain why the script was insufficient.
+- Keep tests isolated from real `SCODEX_HOME`, real account pools, and real remote repositories.
+- When summarizing results, state which commands were verified by the script and whether any path was intentionally validated as an expected failure.
 
 ## 原因判断类回答规则
 
