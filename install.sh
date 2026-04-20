@@ -2,10 +2,11 @@
 set -euo pipefail
 
 REPO="${AUTO_CODEX_REPO:-lauzhihao/scodex}"
-INSTALL_BIN="${INSTALL_BIN:-$HOME/.local/bin}"
-WRAPPER_PATH="${INSTALL_BIN}/scodex"
-COMPAT_WRAPPER_PATH="${INSTALL_BIN}/auto-codex"
-ORIGINAL_WRAPPER_PATH="${INSTALL_BIN}/scodex-original"
+SCODEX_HOME="${SCODEX_HOME:-$HOME/.scodex}"
+BIN_DIR="${SCODEX_HOME}/bin"
+SHIM_PATH="${HOME}/.local/bin/scodex"
+COMPAT_SHIM_PATH="${HOME}/.local/bin/auto-codex"
+ORIGINAL_WRAPPER_PATH="${HOME}/.local/bin/scodex-original"
 VERSION="${AUTO_CODEX_VERSION:-}"
 
 need_cmd() {
@@ -87,7 +88,7 @@ download_and_install() {
   echo "Downloading ${url}"
   curl -fsSL "${url}" -o "${archive_path}"
 
-  mkdir -p "${INSTALL_BIN}"
+  mkdir -p "${BIN_DIR}"
   tar -xzf "${archive_path}" -C "${tmp_dir}"
   extracted_path="${tmp_dir}/scodex"
   if [[ ! -f "${extracted_path}" ]]; then
@@ -95,11 +96,25 @@ download_and_install() {
     exit 1
   fi
 
-  install -m 0755 "${extracted_path}" "${WRAPPER_PATH}"
-  cp "${WRAPPER_PATH}" "${COMPAT_WRAPPER_PATH}"
+  install -m 0755 "${extracted_path}" "${BIN_DIR}/scodex"
+  cp "${BIN_DIR}/scodex" "${BIN_DIR}/auto-codex"
+}
+
+install_shim_scripts() {
+  mkdir -p "${HOME}/.local/bin"
+
+  cat > "${SHIM_PATH}" <<'EOF'
+#!/usr/bin/env bash
+SCODEX_HOME="${SCODEX_HOME:-$HOME/.scodex}"
+exec "$SCODEX_HOME/bin/scodex" "$@"
+EOF
+  chmod 0755 "${SHIM_PATH}"
+
+  cp "${SHIM_PATH}" "${COMPAT_SHIM_PATH}"
 }
 
 install_original_wrapper() {
+  mkdir -p "${HOME}/.local/bin"
   cat > "${ORIGINAL_WRAPPER_PATH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -114,9 +129,9 @@ EOF
 
 post_install_import() {
   if [[ -f "${HOME}/.codex/auth.json" ]]; then
-    if "${WRAPPER_PATH}" import-known >/dev/null 2>&1; then
+    if "${BIN_DIR}/scodex" import-known >/dev/null 2>&1; then
       echo "Imported ${HOME}/.codex/auth.json into scodex state."
-      if "${WRAPPER_PATH}" refresh >/dev/null 2>&1; then
+      if "${BIN_DIR}/scodex" refresh >/dev/null 2>&1; then
         echo "Refreshed scodex usage cache."
       else
         echo "Imported auth.json, but refreshing usage cache failed." >&2
@@ -130,14 +145,15 @@ post_install_import() {
 }
 
 print_next_steps() {
-  echo "Installed to ${WRAPPER_PATH}"
-  echo "Installed compatibility command to ${COMPAT_WRAPPER_PATH}"
+  echo "Installed binary to ${BIN_DIR}/scodex"
+  echo "Installed shim to ${SHIM_PATH}"
+  echo "Installed compatibility command to ${COMPAT_SHIM_PATH}"
   echo "Installed passthrough helper to ${ORIGINAL_WRAPPER_PATH}"
-  if [[ ":$PATH:" != *":${INSTALL_BIN}:"* ]]; then
+  if [[ ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then
     echo
-    echo "${INSTALL_BIN} is not currently on PATH."
+    echo "${HOME}/.local/bin is not currently on PATH."
     echo "Add this line to your shell profile:"
-    echo "  export PATH=\"${INSTALL_BIN}:\$PATH\""
+    echo "  export PATH=\"${HOME}/.local/bin:\$PATH\""
   fi
 }
 
@@ -145,6 +161,7 @@ show_requirements
 TARGET="$(detect_target)"
 VERSION="$(resolve_version)"
 download_and_install "${VERSION}" "${TARGET}"
+install_shim_scripts
 install_original_wrapper
 post_install_import
 print_next_steps

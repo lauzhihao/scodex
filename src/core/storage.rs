@@ -131,6 +131,41 @@ pub fn ensure_exists(path: &Path, label: &str) -> Result<()> {
     bail!("{label} not found: {}", path.display())
 }
 
+pub fn migrate_old_binaries() -> Result<()> {
+    // 清理旧的二进制文件：~/.local/bin/scodex 和 ~/.local/bin/auto-codex
+    // 这些现在被shim脚本替代，存放在 $SCODEX_HOME/bin 中
+    if let Some(home) = env::var_os("HOME") {
+        let home_path = PathBuf::from(home);
+        let local_bin = home_path.join(".local").join("bin");
+
+        let old_scodex = local_bin.join("scodex");
+        let old_auto_codex = local_bin.join("auto-codex");
+
+        // 删除旧的scodex二进制（如果是实际的二进制文件，不是shim脚本）
+        if old_scodex.exists() {
+            if is_old_binary(&old_scodex)? {
+                let _ = fs::remove_file(&old_scodex);
+            }
+        }
+
+        // 删除旧的auto-codex二进制（如果是实际的二进制文件，不是shim脚本）
+        if old_auto_codex.exists() {
+            if is_old_binary(&old_auto_codex)? {
+                let _ = fs::remove_file(&old_auto_codex);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_old_binary(path: &Path) -> Result<bool> {
+    // 如果文件包含 "SCODEX_HOME" 字符串，说明是新的shim脚本，不需要删除
+    // 否则认为是旧的二进制文件
+    let content = fs::read_to_string(path).unwrap_or_default();
+    Ok(!content.contains("SCODEX_HOME"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

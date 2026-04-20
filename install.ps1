@@ -1,10 +1,11 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:AUTO_CODEX_REPO) { $env:AUTO_CODEX_REPO } else { "lauzhihao/scodex" }
-$InstallBin = if ($env:INSTALL_BIN) { $env:INSTALL_BIN } else { Join-Path $HOME ".local\bin" }
-$WrapperPath = Join-Path $InstallBin "scodex.exe"
-$CompatWrapperPath = Join-Path $InstallBin "auto-codex.exe"
-$OriginalWrapperPath = Join-Path $InstallBin "scodex-original.cmd"
+$ScodexHome = if ($env:SCODEX_HOME) { $env:SCODEX_HOME } else { Join-Path $HOME ".scodex" }
+$BinDir = Join-Path $ScodexHome "bin"
+$ShimPath = Join-Path $HOME ".local\bin\scodex.exe"
+$CompatShimPath = Join-Path $HOME ".local\bin\auto-codex.exe"
+$OriginalWrapperPath = Join-Path $HOME ".local\bin\scodex-original.cmd"
 $Version = $env:AUTO_CODEX_VERSION
 
 function Resolve-Version {
@@ -29,7 +30,7 @@ function Resolve-Target {
 
 function Ensure-UserPath {
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  $needle = $InstallBin.TrimEnd('\')
+  $needle = (Join-Path $HOME ".local\bin").TrimEnd('\')
   if (-not $userPath) {
     [Environment]::SetEnvironmentVariable("Path", $needle, "User")
     return
@@ -40,7 +41,25 @@ function Ensure-UserPath {
   }
 }
 
+function Install-ShimScripts {
+  New-Item -ItemType Directory -Path (Split-Path $ShimPath) -Force | Out-Null
+
+  $shimContent = @"
+@echo off
+setlocal enabledelayedexpansion
+set "SCODEX_HOME=%SCODEX_HOME%"
+if not defined SCODEX_HOME (
+  set "SCODEX_HOME=%USERPROFILE%\.scodex"
+)
+"%SCODEX_HOME%\bin\scodex.exe" %*
+"@
+  Set-Content -Path $ShimPath -Value $shimContent -Encoding ASCII
+
+  Copy-Item $ShimPath $CompatShimPath -Force
+}
+
 function Install-OriginalWrapper {
+  New-Item -ItemType Directory -Path (Split-Path $OriginalWrapperPath) -Force | Out-Null
   @"
 @echo off
 where codex >nul 2>nul
@@ -55,8 +74,8 @@ codex %*
 function Post-InstallImport {
   $authPath = Join-Path $HOME ".codex\auth.json"
   if (Test-Path $authPath) {
-    & $WrapperPath import-known | Out-Null
-    & $WrapperPath refresh | Out-Null
+    & (Join-Path $BinDir "scodex.exe") import-known | Out-Null
+    & (Join-Path $BinDir "scodex.exe") refresh | Out-Null
   }
 }
 
@@ -66,7 +85,7 @@ $asset = "scodex-$version-$target.zip"
 $url = "https://github.com/$Repo/releases/download/$version/$asset"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("scodex-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
-New-Item -ItemType Directory -Path $InstallBin -Force | Out-Null
+New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
 $archivePath = Join-Path $tmp $asset
 Invoke-WebRequest -Uri $url -OutFile $archivePath
@@ -77,13 +96,15 @@ if (-not (Test-Path $binaryPath)) {
   throw "Release archive did not contain scodex.exe"
 }
 
-Copy-Item $binaryPath $WrapperPath -Force
-Copy-Item $binaryPath $CompatWrapperPath -Force
+Copy-Item $binaryPath (Join-Path $BinDir "scodex.exe") -Force
+Copy-Item $binaryPath (Join-Path $BinDir "auto-codex.exe") -Force
+Install-ShimScripts
 Install-OriginalWrapper
 Ensure-UserPath
 Post-InstallImport
 
-Write-Host "Installed to $WrapperPath"
-Write-Host "Installed compatibility command to $CompatWrapperPath"
+Write-Host "Installed binary to $(Join-Path $BinDir 'scodex.exe')"
+Write-Host "Installed shim to $ShimPath"
+Write-Host "Installed compatibility command to $CompatShimPath"
 Write-Host "Installed passthrough helper to $OriginalWrapperPath"
 Write-Host "If the current shell cannot find scodex yet, restart PowerShell or open a new terminal."

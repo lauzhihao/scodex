@@ -140,6 +140,9 @@ impl Cli {
 }
 
 pub fn run(cli: Cli) -> Result<i32> {
+    // 迁移旧的二进制文件（从 ~/.local/bin 移到 $SCODEX_HOME/bin）
+    let _ = storage::migrate_old_binaries();
+
     let ui = ui::messages();
     let adapter = CodexAdapter::default();
     let state_dir = storage::resolve_state_dir(cli.state_dir.as_deref())?;
