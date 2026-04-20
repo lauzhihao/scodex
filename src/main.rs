@@ -14,5 +14,6 @@ fn main() {
 
 fn run() -> anyhow::Result<i32> {
     let cli = cli::Cli::parse_args();
-    cli::run(cli)
+    let adapter = adapters::codex::CodexAdapter::default();
+    cli::run(cli, adapter)
 }

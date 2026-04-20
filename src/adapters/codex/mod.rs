@@ -12,10 +12,8 @@ use uuid::Uuid;
 
 use self::auth::decode_identity;
 use self::paths::{codex_home, codex_install_command, find_codex_bin, find_in_path};
-use crate::adapters::{AdapterCapabilities, CliAdapter};
-use crate::core::policy::{
-    choose_best_account, choose_current_account, choose_current_api_account,
-};
+use crate::adapters::{AdapterCapabilities, AppAdapter, CliAdapter};
+use crate::core::engine;
 use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 use crate::core::ui as core_ui;
 
@@ -58,6 +56,125 @@ impl CliAdapter for CodexAdapter {
     }
 }
 
+impl AppAdapter for CodexAdapter {
+    fn display_name(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn normalize_account_records(&self, state: &mut State) -> bool {
+        self.normalize_account_records(state)
+    }
+
+    fn handle_login(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        args: &crate::cli::LoginArgs,
+    ) -> Result<AccountRecord> {
+        if args.api_args.api {
+            let request = build_api_login_request(args)?;
+            self.run_api_key_login(state_dir, state, request)
+        } else if args.oauth {
+            let request = build_autofill_request(args)?;
+            self.run_device_auth_login_autofill(state_dir, state, request)
+        } else {
+            self.run_device_auth_login(state_dir, state)
+        }
+    }
+
+    fn login_default(&self, state_dir: &Path, state: &mut State) -> Result<AccountRecord> {
+        self.run_device_auth_login(state_dir, state)
+    }
+
+    fn handle_add(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        args: &crate::cli::AddArgs,
+    ) -> Result<AccountRecord> {
+        if args.api_args.api {
+            let request = build_api_login_request_from_add(args)?;
+            self.run_api_key_login(state_dir, state, request)
+        } else {
+            self.run_device_auth_login(state_dir, state)
+        }
+    }
+
+    fn import_known_sources(&self, state_dir: &Path, state: &mut State) -> Vec<AccountRecord> {
+        self.import_known_sources(state_dir, state)
+    }
+
+    fn find_account_by_email<'a>(
+        &self,
+        state: &'a State,
+        email: &str,
+    ) -> Option<&'a AccountRecord> {
+        self.find_account_by_email(state, email)
+    }
+
+    fn switch_account(&self, record: &AccountRecord) -> Result<()> {
+        self.switch_account(record)
+    }
+
+    fn remove_account(&self, state_dir: &Path, state: &mut State, id: &str) -> Result<()> {
+        self.remove_account(state_dir, state, id)
+    }
+
+    fn handle_deploy(&self, target: &str, identity_file: Option<&Path>) -> Result<()> {
+        self.deploy_live_auth(target, identity_file)
+    }
+
+    fn handle_push(
+        &self,
+        state: &State,
+        repo: &str,
+        path: Option<&str>,
+        identity_file: Option<&Path>,
+    ) -> Result<crate::core::sync::git::PushOutcome> {
+        self.push_account_pool(state, repo, path, identity_file)
+    }
+
+    fn handle_pull(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        repo: &str,
+        path: Option<&str>,
+        identity_file: Option<&Path>,
+    ) -> Result<crate::core::sync::git::PullOutcome> {
+        self.pull_account_pool(state_dir, state, repo, path, identity_file)
+    }
+
+    fn read_live_identity(&self) -> Option<LiveIdentity> {
+        self.read_live_identity()
+    }
+
+    fn render_account_table(&self, state: &State, active: Option<&LiveIdentity>) -> String {
+        self.render_account_table(state, active)
+    }
+
+    fn handle_import_auth(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        path: &Path,
+    ) -> Result<AccountRecord> {
+        self.import_auth_path(state_dir, state, path)
+    }
+
+    fn refresh_usage(&self, state: &mut State, record: &AccountRecord) -> UsageSnapshot {
+        self.refresh_account_usage(state, record)
+    }
+
+    fn launch_process(&self, extra_args: &[std::ffi::OsString], resume: bool) -> Result<i32> {
+        self.launch_codex(extra_args, resume)
+    }
+
+    fn run_passthrough(&self, extra_args: &[std::ffi::OsString]) -> Result<i32> {
+        self.run_passthrough(extra_args)
+    }
+}
+
 impl CodexAdapter {
     pub fn read_live_identity(&self) -> Option<LiveIdentity> {
         let home = codex_home();
@@ -82,61 +199,7 @@ impl CodexAdapter {
         no_login: bool,
         perform_switch: bool,
     ) -> Result<Option<(AccountRecord, UsageSnapshot)>> {
-        if !no_import_known {
-            self.import_known_sources(state_dir, state);
-        }
-
-        if state.accounts.is_empty() {
-            if no_login {
-                return Ok(None);
-            }
-            let record = self.run_device_auth_login(state_dir, state)?;
-            let usage = self.refresh_account_usage(state, &record);
-            if perform_switch {
-                self.switch_account(&record)?;
-            }
-            return Ok(Some((record, usage)));
-        }
-
-        let live_identity = self.read_live_identity();
-        if let Some(current) = choose_current_api_account(state, live_identity.as_ref()).cloned() {
-            let usage = UsageSnapshot::default();
-            if perform_switch {
-                self.switch_account(&current)?;
-            }
-            return Ok(Some((current, usage)));
-        }
-
-        self.refresh_all_accounts(state);
-        if let Some(current) = choose_current_account(state, live_identity.as_ref()).cloned() {
-            let usage = state
-                .usage_cache
-                .get(&current.id)
-                .cloned()
-                .unwrap_or_default();
-            if perform_switch {
-                self.switch_account(&current)?;
-            }
-            return Ok(Some((current, usage)));
-        }
-
-        if let Some(best) = choose_best_account(state).cloned() {
-            let usage = state.usage_cache.get(&best.id).cloned().unwrap_or_default();
-            if perform_switch {
-                self.switch_account(&best)?;
-            }
-            return Ok(Some((best, usage)));
-        }
-
-        if no_login {
-            return Ok(None);
-        }
-        let record = self.run_device_auth_login(state_dir, state)?;
-        let usage = self.refresh_account_usage(state, &record);
-        if perform_switch {
-            self.switch_account(&record)?;
-        }
-        Ok(Some((record, usage)))
+        engine::ensure_best_account(self, state_dir, state, no_import_known, no_login, perform_switch)
     }
 
     pub fn run_device_auth_login(
@@ -431,6 +494,54 @@ fn now_ts() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn build_autofill_request(args: &crate::cli::LoginArgs) -> Result<AutofillRequest> {
+    let ui = core_ui::messages();
+    if args.api_args.api {
+        bail!("{}", ui.login_mode_conflict());
+    }
+    match (args.username.as_deref(), args.password.as_deref()) {
+        (Some(email), Some(password)) if !email.trim().is_empty() && !password.is_empty() => {
+            Ok(AutofillRequest {
+                email: email.trim().to_string(),
+                password: password.to_string(),
+            })
+        }
+        _ => bail!("{}", ui.login_autofill_missing_credentials()),
+    }
+}
+
+fn build_api_login_request(args: &crate::cli::LoginArgs) -> Result<ApiLoginRequest> {
+    build_api_login_request_parts(&args.api_args)
+}
+
+fn build_api_login_request_from_add(args: &crate::cli::AddArgs) -> Result<ApiLoginRequest> {
+    build_api_login_request_parts(&args.api_args)
+}
+
+fn build_api_login_request_parts(args: &crate::cli::ApiArgs) -> Result<ApiLoginRequest> {
+    let ui = core_ui::messages();
+    let Some(api_token) = args.api_token.as_deref().map(str::trim) else {
+        bail!("{}", ui.login_api_missing_credentials());
+    };
+    let Some(base_url) = args.base_url.as_deref().map(str::trim) else {
+        bail!("{}", ui.login_api_missing_credentials());
+    };
+    let Some(provider) = args.provider.as_deref().map(str::trim) else {
+        bail!("{}", ui.login_api_missing_credentials());
+    };
+
+    let display_body = api_token.strip_prefix("sk-").unwrap_or(api_token);
+    if display_body.chars().count() < 8 || base_url.is_empty() || provider.is_empty() {
+        bail!("{}", ui.login_api_missing_credentials());
+    }
+
+    Ok(ApiLoginRequest {
+        api_token: api_token.to_string(),
+        base_url: base_url.to_string(),
+        provider: provider.to_ascii_lowercase(),
+    })
 }
 
 fn detect_local_ip() -> String {

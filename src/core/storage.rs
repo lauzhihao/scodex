@@ -131,6 +131,23 @@ pub fn ensure_exists(path: &Path, label: &str) -> Result<()> {
     bail!("{label} not found: {}", path.display())
 }
 
+pub fn find_in_path(binary: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    for dir in env::split_paths(&path_var) {
+        let candidate = dir.join(binary);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+pub fn find_program(candidates: &[&str]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find_map(|candidate| find_in_path(candidate))
+}
+
 pub fn migrate_old_binaries() -> Result<()> {
     // 清理旧的二进制文件：~/.local/bin/scodex 和 ~/.local/bin/auto-codex
     // 这些现在被shim脚本替代，存放在 $SCODEX_HOME/bin 中

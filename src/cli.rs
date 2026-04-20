@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
-use crate::adapters::codex::{ApiLoginRequest, AutofillRequest, CodexAdapter};
+use crate::adapters::AppAdapter;
+use crate::core::engine;
 use crate::core::state::{AccountRecord, UsageSnapshot};
 use crate::core::storage;
 use crate::core::ui;
@@ -157,12 +158,11 @@ impl Cli {
     }
 }
 
-pub fn run(cli: Cli) -> Result<i32> {
+pub fn run<A: AppAdapter>(cli: Cli, adapter: A) -> Result<i32> {
     // 迁移旧的二进制文件（从 ~/.local/bin 移到 $SCODEX_HOME/bin）
     let _ = storage::migrate_old_binaries();
 
     let ui = ui::messages();
-    let adapter = CodexAdapter::default();
     let state_dir = storage::resolve_state_dir(cli.state_dir.as_deref())?;
     let mut state = storage::load_state(&state_dir)?;
     if adapter.normalize_account_records(&mut state) {
@@ -179,7 +179,8 @@ pub fn run(cli: Cli) -> Result<i32> {
 
     let exit_code = match command {
         Command::Launch(args) => {
-            match adapter.ensure_best_account(
+            match engine::ensure_best_account(
+                &adapter,
                 &state_dir,
                 &mut state,
                 args.no_import_known,
@@ -188,16 +189,16 @@ pub fn run(cli: Cli) -> Result<i32> {
             )? {
                 Some((account, usage)) => {
                     if args.dry_run {
-                        print_selection(ui.selection_would_select(), &account, &usage);
+                        print_selection(&ui.selection_would_select(), &account, &usage);
                         storage::save_state(&state_dir, &state)?;
                         0
                     } else {
-                        print_selection(ui.selection_switched(), &account, &usage);
+                        print_selection(&ui.selection_switched(), &account, &usage);
                         storage::save_state(&state_dir, &state)?;
                         if args.no_launch {
                             0
                         } else {
-                            adapter.launch_codex(&args.extra_args, !args.no_resume)?
+                            adapter.launch_process(&args.extra_args, !args.no_resume)?
                         }
                     }
                 }
@@ -209,7 +210,8 @@ pub fn run(cli: Cli) -> Result<i32> {
             }
         }
         Command::Auto(args) => {
-            match adapter.ensure_best_account(
+            match engine::ensure_best_account(
+                &adapter,
                 &state_dir,
                 &mut state,
                 args.no_import_known,
@@ -218,9 +220,9 @@ pub fn run(cli: Cli) -> Result<i32> {
             )? {
                 Some((account, usage)) => {
                     if args.dry_run {
-                        print_selection(ui.selection_would_select(), &account, &usage);
+                        print_selection(&ui.selection_would_select(), &account, &usage);
                     } else {
-                        print_selection(ui.selection_switched(), &account, &usage);
+                        print_selection(&ui.selection_switched(), &account, &usage);
                     }
                     storage::save_state(&state_dir, &state)?;
                     0
@@ -233,29 +235,16 @@ pub fn run(cli: Cli) -> Result<i32> {
             }
         }
         Command::Login(args) => {
-            let record = if args.api_args.api {
-                let request = build_api_login_request(&args.api_args, &ui)?;
-                adapter.run_api_key_login(&state_dir, &mut state, request)?
-            } else if args.oauth {
-                let request = build_autofill_request(&args, &ui)?;
-                adapter.run_device_auth_login_autofill(&state_dir, &mut state, request)?
-            } else {
-                adapter.run_device_auth_login(&state_dir, &mut state)?
-            };
+            let record = adapter.handle_login(&state_dir, &mut state, &args)?;
             finish_added_account(&adapter, &state_dir, &mut state, &record)?
         }
         Command::Add(args) => {
-            let record = if args.api_args.api {
-                let request = build_api_login_request(&args.api_args, &ui)?;
-                adapter.run_api_key_login(&state_dir, &mut state, request)?
-            } else {
-                adapter.run_device_auth_login(&state_dir, &mut state)?
-            };
+            let record = adapter.handle_add(&state_dir, &mut state, &args)?;
             finish_added_account(&adapter, &state_dir, &mut state, &record)?
         }
         Command::Use(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
-            let Some(record) = adapter.find_account_by_email(&state, &args.email) else {
+            let Some(record) = engine::find_account_by_email(&state, &args.email) else {
                 println!("{}", ui.unknown_account(&args.email));
                 storage::save_state(&state_dir, &state)?;
                 return Ok(1);
@@ -266,14 +255,13 @@ pub fn run(cli: Cli) -> Result<i32> {
                 .get(&record.id)
                 .cloned()
                 .unwrap_or_default();
-            print_selection(ui.selection_switched(), record, &usage);
+            print_selection(&ui.selection_switched(), record, &usage);
             storage::save_state(&state_dir, &state)?;
             0
         }
         Command::Rm(args) => {
             adapter.import_known_sources(&state_dir, &mut state);
-            let Some((id, email)) = adapter
-                .find_account_by_email(&state, &args.email)
+            let Some((id, email)) = engine::find_account_by_email(&state, &args.email)
                 .map(|record| (record.id.clone(), record.email.clone()))
             else {
                 println!("{}", ui.unknown_account(&args.email));
@@ -307,13 +295,13 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Deploy(args) => {
-            adapter.deploy_live_auth(&args.target, args.identity_file.as_deref())?;
+            adapter.handle_deploy(&args.target, args.identity_file.as_deref())?;
             0
         }
         Command::Push(args) => {
             let (repo, repo_from_cli) = resolve_repo_for_sync(args.repo.as_deref(), &state, &ui)?;
             persist_repo_from_cli(&state_dir, &mut state, &repo, repo_from_cli)?;
-            let outcome = adapter.push_account_pool(
+            let outcome = adapter.handle_push(
                 &state,
                 &repo,
                 args.path.as_deref(),
@@ -332,7 +320,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Pull(args) => {
             let (repo, repo_from_cli) = resolve_repo_for_sync(args.repo.as_deref(), &state, &ui)?;
             persist_repo_from_cli(&state_dir, &mut state, &repo, repo_from_cli)?;
-            let outcome = adapter.pull_account_pool(
+            let outcome = adapter.handle_pull(
                 &state_dir,
                 &mut state,
                 &repo,
@@ -344,21 +332,21 @@ pub fn run(cli: Cli) -> Result<i32> {
                 "{}",
                 ui.repo_pull_completed(&repo, outcome.imported_accounts)
             );
-            adapter.refresh_all_accounts(&mut state);
+            engine::refresh_all_accounts(&adapter, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.read_live_identity();
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::List => {
-            adapter.refresh_all_accounts(&mut state);
+            engine::refresh_all_accounts(&adapter, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.read_live_identity();
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
             0
         }
         Command::Refresh => {
-            adapter.refresh_all_accounts(&mut state);
+            engine::refresh_all_accounts(&adapter, &mut state);
             storage::save_state(&state_dir, &state)?;
             let active = adapter.read_live_identity();
             println!("{}", adapter.render_account_table(&state, active.as_ref()));
@@ -394,7 +382,7 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::ImportAuth(args) => {
-            let record = adapter.import_auth_path(&state_dir, &mut state, &args.path)?;
+            let record = adapter.handle_import_auth(&state_dir, &mut state, &args.path)?;
             storage::save_state(&state_dir, &state)?;
             println!("{}", ui.imported_account(&record.email, &record.id));
             0
@@ -413,9 +401,9 @@ pub fn run(cli: Cli) -> Result<i32> {
             0
         }
         Command::Passthrough(args) => {
-            match adapter.ensure_best_account(&state_dir, &mut state, false, false, true)? {
+            match engine::ensure_best_account(&adapter, &state_dir, &mut state, false, false, true)? {
                 Some((account, usage)) => {
-                    print_selection(ui.selection_switched(), &account, &usage);
+                    print_selection(&ui.selection_switched(), &account, &usage);
                     storage::save_state(&state_dir, &state)?;
                     adapter.run_passthrough(&args)?
                 }
@@ -438,57 +426,19 @@ fn format_percent(value: Option<i64>) -> String {
         .unwrap_or_else(|| ui.na().into())
 }
 
-fn finish_added_account(
-    adapter: &CodexAdapter,
+fn finish_added_account<A: AppAdapter>(
+    adapter: &A,
     state_dir: &std::path::Path,
     state: &mut crate::core::state::State,
     record: &AccountRecord,
 ) -> Result<i32> {
     let ui = ui::messages();
-    let usage = adapter.refresh_account_usage(state, record);
+    let usage = adapter.refresh_usage(state, record);
     println!("{}", ui.added_account(&record.email));
     adapter.switch_account(record)?;
     print_selection(ui.selection_switched(), record, &usage);
     storage::save_state(state_dir, state)?;
     Ok(0)
-}
-
-fn build_autofill_request(args: &LoginArgs, ui: &ui::Messages) -> Result<AutofillRequest> {
-    if args.api_args.api {
-        anyhow::bail!("{}", ui.login_mode_conflict());
-    }
-    match (args.username.as_deref(), args.password.as_deref()) {
-        (Some(email), Some(password)) if !email.trim().is_empty() && !password.is_empty() => {
-            Ok(AutofillRequest {
-                email: email.trim().to_string(),
-                password: password.to_string(),
-            })
-        }
-        _ => anyhow::bail!("{}", ui.login_autofill_missing_credentials()),
-    }
-}
-
-fn build_api_login_request(args: &ApiArgs, ui: &ui::Messages) -> Result<ApiLoginRequest> {
-    let Some(api_token) = args.api_token.as_deref().map(str::trim) else {
-        anyhow::bail!("{}", ui.login_api_missing_credentials());
-    };
-    let Some(base_url) = args.base_url.as_deref().map(str::trim) else {
-        anyhow::bail!("{}", ui.login_api_missing_credentials());
-    };
-    let Some(provider) = args.provider.as_deref().map(str::trim) else {
-        anyhow::bail!("{}", ui.login_api_missing_credentials());
-    };
-
-    let display_body = api_token.strip_prefix("sk-").unwrap_or(api_token);
-    if display_body.chars().count() < 8 || base_url.is_empty() || provider.is_empty() {
-        anyhow::bail!("{}", ui.login_api_missing_credentials());
-    }
-
-    Ok(ApiLoginRequest {
-        api_token: api_token.to_string(),
-        base_url: base_url.to_string(),
-        provider: provider.to_ascii_lowercase(),
-    })
 }
 
 fn resolve_repo_for_sync(
