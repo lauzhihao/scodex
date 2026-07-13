@@ -1,9 +1,7 @@
-use crate::core::state::{
-    AccountRecord, CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT, LiveIdentity, State, UsageSnapshot,
-};
+use crate::core::state::{AccountRecord, LiveIdentity, State, UsageSnapshot};
 
 pub fn choose_best_account<'a>(state: &'a State) -> Option<&'a AccountRecord> {
-    let mut candidates: Vec<((i64, i64, i64, f64, i64, i64), &AccountRecord)> = state
+    let mut candidates: Vec<((i64, i64, f64, i64, i64), &AccountRecord)> = state
         .accounts
         .iter()
         .filter(|account| account.is_subscription())
@@ -74,22 +72,16 @@ fn is_current_account_usable(usage: &UsageSnapshot) -> bool {
         return false;
     }
 
-    let five_hour_ok = match usage.five_hour_remaining_percent {
-        Some(value) => (value as f64) >= CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT,
-        None => false,
-    };
-
     let weekly_ok = match usage.weekly_remaining_percent {
         Some(value) => value > 5,
         None => false,
     };
 
-    five_hour_ok && weekly_ok
+    weekly_ok
 }
 
-fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, i64, f64, i64, i64) {
+fn build_score(account: &AccountRecord, usage: &UsageSnapshot) -> (i64, i64, f64, i64, i64) {
     (
-        quota_score(usage.five_hour_remaining_percent),
         quota_score(usage.weekly_remaining_percent),
         // 重置时间戳越早（数值越小）越优先；缺失视为无限远，排到最差
         parse_refresh_ts(&usage.weekly_refresh_at),
@@ -124,16 +116,15 @@ trait TotalCmpTuple {
     fn total_cmp(&self, other: &Self) -> std::cmp::Ordering;
 }
 
-impl TotalCmpTuple for (i64, i64, i64, f64, i64, i64) {
+impl TotalCmpTuple for (i64, i64, f64, i64, i64) {
     fn total_cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0
             .cmp(&other.0)
-            .then(self.1.cmp(&other.1))
             // 重置时间戳：升序（越早越优），所以在降序外壳里反向比较
-            .then_with(|| other.2.cmp(&self.2))
-            .then_with(|| self.3.total_cmp(&other.3))
+            .then_with(|| other.1.cmp(&self.1))
+            .then_with(|| self.2.total_cmp(&other.2))
+            .then(self.3.cmp(&other.3))
             .then(self.4.cmp(&other.4))
-            .then(self.5.cmp(&other.5))
     }
 }
 
@@ -148,7 +139,7 @@ mod tests {
     use crate::core::state::{AccountRecord, AccountType, LiveIdentity, State, UsageSnapshot};
 
     #[test]
-    fn keeps_current_account_when_threshold_is_met() {
+    fn keeps_current_account_when_weekly_is_usable_even_if_five_hour_is_zero() {
         let state = State {
             version: 1,
             accounts: vec![
@@ -171,7 +162,7 @@ mod tests {
                 (
                     "current".into(),
                     UsageSnapshot {
-                        five_hour_remaining_percent: Some(25),
+                        five_hour_remaining_percent: Some(0),
                         weekly_remaining_percent: Some(20),
                         ..UsageSnapshot::default()
                     },
@@ -201,14 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn current_account_below_threshold_is_not_usable() {
+    fn current_account_without_five_hour_quota_is_usable() {
         let usage = UsageSnapshot {
-            five_hour_remaining_percent: Some(19),
+            five_hour_remaining_percent: None,
             weekly_remaining_percent: Some(50),
             ..UsageSnapshot::default()
         };
 
-        assert!(!is_current_account_usable(&usage));
+        assert!(is_current_account_usable(&usage));
     }
 
     #[test]
@@ -306,6 +297,7 @@ mod tests {
     fn current_account_with_sync_error_is_not_usable() {
         let usage = UsageSnapshot {
             five_hour_remaining_percent: Some(80),
+            weekly_remaining_percent: Some(50),
             last_sync_error: Some("quota api failed".into()),
             ..UsageSnapshot::default()
         };
@@ -314,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn best_account_prefers_five_hour_quota() {
+    fn best_account_prefers_weekly_quota_when_five_hour_conflicts() {
         let state = State {
             version: 1,
             accounts: vec![
@@ -337,7 +329,7 @@ mod tests {
                 (
                     "weekly-heavy".into(),
                     UsageSnapshot {
-                        five_hour_remaining_percent: Some(5),
+                        five_hour_remaining_percent: Some(0),
                         weekly_remaining_percent: Some(95),
                         credits_balance: Some(0.0),
                         last_synced_at: Some(10),
@@ -360,7 +352,7 @@ mod tests {
 
         let best = choose_best_account(&state);
 
-        assert_eq!(best.map(|item| item.id.as_str()), Some("five-heavy"));
+        assert_eq!(best.map(|item| item.id.as_str()), Some("weekly-heavy"));
     }
 
     #[test]
@@ -411,43 +403,43 @@ mod tests {
     }
 
     #[test]
-    fn best_account_uses_refresh_when_quotas_in_same_tier() {
-        // 5h 55% vs 62% 属同一档（50-74），不应让 7 个点的差异盖过重置时间
+    fn best_account_ignores_five_hour_when_other_usage_scores_match() {
+        // 5h 不参与选号；其他 usage score 打平时应按账号更新时间选择
         let state = State {
             version: 1,
             accounts: vec![
                 AccountRecord {
-                    id: "higher-pct-later-reset".into(),
-                    email: "later@example.com".into(),
+                    id: "high-five-older".into(),
+                    email: "older@example.com".into(),
                     account_id: None,
                     updated_at: 1,
                     ..AccountRecord::default()
                 },
                 AccountRecord {
-                    id: "lower-pct-sooner-reset".into(),
-                    email: "sooner@example.com".into(),
+                    id: "zero-five-newer".into(),
+                    email: "newer@example.com".into(),
                     account_id: None,
-                    updated_at: 1,
+                    updated_at: 2,
                     ..AccountRecord::default()
                 },
             ],
             usage_cache: BTreeMap::from([
                 (
-                    "higher-pct-later-reset".into(),
+                    "high-five-older".into(),
                     UsageSnapshot {
-                        five_hour_remaining_percent: Some(62),
-                        weekly_remaining_percent: Some(55),
-                        weekly_refresh_at: Some("2026-04-20T04:00:00Z".into()),
+                        five_hour_remaining_percent: Some(100),
+                        weekly_remaining_percent: Some(60),
+                        weekly_refresh_at: Some("2026-04-18T14:00:00Z".into()),
                         credits_balance: Some(0.0),
                         last_synced_at: Some(10),
                         ..UsageSnapshot::default()
                     },
                 ),
                 (
-                    "lower-pct-sooner-reset".into(),
+                    "zero-five-newer".into(),
                     UsageSnapshot {
-                        five_hour_remaining_percent: Some(55),
-                        weekly_remaining_percent: Some(62),
+                        five_hour_remaining_percent: Some(0),
+                        weekly_remaining_percent: Some(60),
                         weekly_refresh_at: Some("2026-04-18T14:00:00Z".into()),
                         credits_balance: Some(0.0),
                         last_synced_at: Some(10),
@@ -460,15 +452,12 @@ mod tests {
 
         let best = choose_best_account(&state);
 
-        assert_eq!(
-            best.map(|item| item.id.as_str()),
-            Some("lower-pct-sooner-reset")
-        );
+        assert_eq!(best.map(|item| item.id.as_str()), Some("zero-five-newer"));
     }
 
     #[test]
     fn best_account_prefers_earlier_weekly_refresh_on_tie() {
-        // 5h% / weekly% / credits / last_synced_at 全打平时，应按重置时间早者优先
+        // weekly% / credits / last_synced_at 全打平时，应按重置时间早者优先
         let state = State {
             version: 1,
             accounts: vec![

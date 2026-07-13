@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_ACCOUNT_MIN_FIVE_HOUR_PERCENT: f64 = 20.0;
 pub const STATE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -70,9 +70,9 @@ cargo build --release
 
 | 命令 | 作用 |
 | --- | --- |
-| `scodex` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，然后启动或恢复 Codex |
+| `scodex` | 刷新额度；如果当前账号 usage 健康且 weekly 剩余额度大于 5% 就继续使用它，否则切换到最佳账号，然后启动或恢复 Codex |
 | `scodex launch` | 默认行为的显式写法 |
-| `scodex auto` | 刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
+| `scodex auto` | 刷新额度；如果当前账号 usage 健康且 weekly 剩余额度大于 5% 就继续使用它，否则切换到最佳账号，但不启动 Codex |
 | `scodex add` | 通过设备登录添加一个账号并立即切换（`--switch` 仅保留兼容） |
 | `scodex login` | 通过 `codex login --device-auth` 添加官方订阅账号，或通过 `--api` 添加 API 账号 |
 | `scodex deploy <target>` | 把当前 `~/.codex/auth.json` 复制到远端机器和路径（`sync` 为别名） |
@@ -105,7 +105,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 - `--no-resume`：总是新开会话，不执行 `resume --last`
 - `--no-launch`：只切换账号，不启动 Codex
 - 命令后面的额外参数会继续传给 Codex
-- 刷新后，如果当前账号的 5h 剩余额度仍然不少于 20%，`launch` 会直接继续使用它，不再重新对所有账号打分选号
+- 刷新后，如果当前账号 usage 健康且 weekly 剩余额度仍然大于 5%，`launch` 会直接继续使用它，不再重新对所有账号打分选号
 
 ### `auto`
 
@@ -113,7 +113,7 @@ scodex launch [--no-import-known] [--no-login] [--dry-run] [--no-resume] [--no-l
 scodex auto [--no-import-known] [--no-login] [--dry-run]
 ```
 
-- 会刷新额度；如果当前账号的 5h 剩余额度至少还有 20% 就继续使用它，否则切换到最佳账号
+- 会刷新额度；如果当前账号 usage 健康且 weekly 剩余额度大于 5% 就继续使用它，否则切换到最佳账号
 - 不会启动 Codex
 
 ### `login`
@@ -293,7 +293,7 @@ scodex exec "fix failing test"
 ## 选号说明
 
 - 刷新额度时会调用实时 usage API，不只是读本地缓存
-- 选号时优先看 `5h` 窗口剩余额度，再看 weekly 额度
+- 选号时忽略 `5h` 剩余额度；先按 weekly 额度分档，再依次比较 weekly 重置时间、credits、额度同步时间和账号更新时间
 - 目标是优先挑出“下一次会话最可能立刻可用”的账号
 
 ## 发布检查清单
