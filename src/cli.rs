@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
 use crate::adapters::codex::{ApiLoginRequest, AutofillRequest, CodexAdapter};
-use crate::core::state::{AccountRecord, UsageSnapshot};
+use crate::core::state::{AccountRecord, AccountType, UsageSnapshot};
 use crate::core::storage;
 use crate::core::ui;
 use crate::core::update;
@@ -196,7 +196,9 @@ pub fn run(cli: Cli) -> Result<i32> {
                         if args.no_launch {
                             0
                         } else {
-                            adapter.launch_codex(&args.extra_args, !args.no_resume)?
+                            let launch_args =
+                                codex_launch_args(account.account_type, &args.extra_args);
+                            adapter.launch_codex(&launch_args, !args.no_resume)?
                         }
                     }
                 }
@@ -435,6 +437,19 @@ fn format_percent(value: Option<i64>) -> String {
     value
         .map(|value| format!("{value}%"))
         .unwrap_or_else(|| ui.na().into())
+}
+
+fn codex_launch_args(account_type: AccountType, extra_args: &[OsString]) -> Vec<OsString> {
+    let mut launch_args = extra_args.to_vec();
+    if account_type == AccountType::Api {
+        launch_args.extend([
+            OsString::from("-c"),
+            OsString::from("disable_response_storage=true"),
+            OsString::from("--disable"),
+            OsString::from("apps"),
+        ]);
+    }
+    launch_args
 }
 
 fn finish_added_account(
@@ -1323,9 +1338,38 @@ fn render_help_with_lang(topic: HelpTopic, is_zh: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use clap::Parser;
 
-    use super::{Cli, Command, HelpTopic, render_help_with_lang, resolve_repo_source};
+    use super::{
+        AccountType, Cli, Command, HelpTopic, codex_launch_args, render_help_with_lang,
+        resolve_repo_source,
+    };
+
+    #[test]
+    fn api_launch_disables_response_storage_and_apps() {
+        let args = codex_launch_args(AccountType::Api, &[OsString::from("--model=test")]);
+
+        assert_eq!(
+            args,
+            [
+                "--model=test",
+                "-c",
+                "disable_response_storage=true",
+                "--disable",
+                "apps",
+            ]
+            .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn subscription_launch_keeps_arguments_unchanged() {
+        let args = codex_launch_args(AccountType::Subscription, &[OsString::from("--model=test")]);
+
+        assert_eq!(args, [OsString::from("--model=test")]);
+    }
 
     #[test]
     fn add_supports_api_options() {
