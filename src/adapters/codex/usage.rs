@@ -409,6 +409,10 @@ fn normalize_usage_response(payload: &Value) -> UsageSnapshot {
     let mut five_hour = None;
     let mut weekly = None;
     for window in windows.into_iter().flatten() {
+        // null / 非 object 不能当成 5h 耗尽；weekly-only 账号的 secondary_window 就是 null
+        if !window.is_object() {
+            continue;
+        }
         let (snapshot, role) = map_window(window);
         match role {
             WindowRole::FiveHour => {
@@ -563,6 +567,43 @@ mod tests {
         assert_eq!(usage.five_hour_remaining_percent, Some(80));
         assert_eq!(usage.weekly_remaining_percent, Some(30));
         assert_eq!(usage.credits_balance, Some(12.5));
+    }
+
+    #[test]
+    fn normalize_usage_response_ignores_null_window_for_weekly_only() {
+        let usage = normalize_usage_response(&serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 27,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1788798169
+                },
+                "secondary_window": null
+            }
+        }));
+
+        assert_eq!(usage.five_hour_remaining_percent, None);
+        assert_eq!(usage.five_hour_refresh_at, None);
+        assert_eq!(usage.weekly_remaining_percent, Some(73));
+    }
+
+    #[test]
+    fn normalize_usage_response_ignores_null_primary_window() {
+        let usage = normalize_usage_response(&serde_json::json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": null,
+                "secondary_window": {
+                    "used_percent": 10,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1788798169
+                }
+            }
+        }));
+
+        assert_eq!(usage.five_hour_remaining_percent, None);
+        assert_eq!(usage.weekly_remaining_percent, Some(90));
     }
 
     #[test]

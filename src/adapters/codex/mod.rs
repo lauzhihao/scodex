@@ -137,15 +137,8 @@ impl CodexAdapter {
             return Ok(Some((best, usage)));
         }
 
-        if no_login {
-            return Ok(None);
-        }
-        let record = self.run_device_auth_login(state_dir, state)?;
-        let usage = self.refresh_account_usage(state, &record);
-        if perform_switch {
-            self.switch_account(&record)?;
-        }
-        Ok(Some((record, usage)))
+        // 号池已有账号但都不可用时，不要自动 login 覆盖当前 auth
+        Ok(None)
     }
 
     pub fn run_device_auth_login(
