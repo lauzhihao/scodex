@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+use std::ffi::{OsStr, OsString};
+#[cfg(test)]
+use std::sync::Mutex;
+
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use uuid::Uuid;
@@ -66,6 +71,37 @@ pub struct ApiLoginRequest {
 
 #[derive(Debug, Default)]
 pub struct CodexAdapter;
+
+#[cfg(test)]
+pub(super) static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(super) struct EnvGuard {
+    key: String,
+    previous: Option<OsString>,
+}
+
+#[cfg(test)]
+impl EnvGuard {
+    pub(super) fn set(key: impl Into<String>, value: impl AsRef<OsStr>) -> Self {
+        let key = key.into();
+        let previous = env::var_os(&key);
+        unsafe { env::set_var(&key, value) };
+        Self { key, previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => env::set_var(&self.key, value),
+                None => env::remove_var(&self.key),
+            }
+        }
+    }
+}
 
 impl CodexAdapter {
     pub fn read_live_identity(&self) -> Option<LiveIdentity> {
@@ -137,15 +173,8 @@ impl CodexAdapter {
             return Ok(Some((best, usage)));
         }
 
-        if no_login {
-            return Ok(None);
-        }
-        let record = self.run_device_auth_login(state_dir, state)?;
-        let usage = self.refresh_account_usage(state, &record);
-        if perform_switch {
-            self.switch_account(&record)?;
-        }
-        Ok(Some((record, usage)))
+        // 号池已有账号但都不可用时，不要自动 login 覆盖当前 auth
+        Ok(None)
     }
 
     pub fn run_device_auth_login(
