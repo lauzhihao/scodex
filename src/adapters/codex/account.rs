@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::ApiLoginRequest;
 use super::CodexAdapter;
-use super::auth::decode_identity;
+use super::auth::{chatgpt_identities_match, decode_identity, live_auth_is_newer};
 use super::now_ts;
 use super::paths::codex_home;
 use crate::core::state::{AccountRecord, AccountType, State};
@@ -52,6 +52,17 @@ impl CodexAdapter {
         raw_path: &Path,
         preferred_id: Option<&str>,
     ) -> Result<AccountRecord> {
+        self.import_auth_path_internal(state_dir, state, raw_path, preferred_id, false)
+    }
+
+    fn import_auth_path_internal(
+        &self,
+        state_dir: &Path,
+        state: &mut State,
+        raw_path: &Path,
+        preferred_id: Option<&str>,
+        only_if_newer: bool,
+    ) -> Result<AccountRecord> {
         let input_path = if raw_path.is_dir() {
             raw_path.join("auth.json")
         } else {
@@ -64,6 +75,14 @@ impl CodexAdapter {
         let config_path = input_path.parent().map(|item| item.join("config.toml"));
         let existing =
             find_matching_account(state, &identity.email, identity.account_id.as_deref());
+        if only_if_newer
+            && let Some(existing) = existing
+            && Path::new(&existing.auth_path).exists()
+            && let Ok(stored) = self.read_auth_json(Path::new(&existing.auth_path))
+            && !live_auth_is_newer(&auth, &stored)
+        {
+            return Ok(existing.clone());
+        }
         let account_id = existing
             .map(|item| item.id.clone())
             .or_else(|| {
@@ -166,18 +185,20 @@ impl CodexAdapter {
         let mut imported = Vec::new();
         let mut seen = std::collections::BTreeSet::new();
 
-        let mut maybe_import = |path: PathBuf| {
+        let mut maybe_import = |path: PathBuf, only_if_newer: bool| {
             let key = path.to_string_lossy().into_owned();
             if seen.contains(&key) || !path.exists() {
                 return;
             }
             seen.insert(key);
-            if let Ok(record) = self.import_auth_path(state_dir, state, &path) {
+            if let Ok(record) =
+                self.import_auth_path_internal(state_dir, state, &path, None, only_if_newer)
+            {
                 imported.push(record);
             }
         };
 
-        maybe_import(codex_home().join("auth.json"));
+        maybe_import(codex_home().join("auth.json"), true);
 
         if !env_flag_enabled("AUTO_CODEX_IMPORT_ACCOUNTS_HUB") {
             return dedupe_imported(imported);
@@ -206,7 +227,7 @@ impl CodexAdapter {
                     Err(_) => continue,
                 };
                 for entry in entries.flatten() {
-                    maybe_import(entry.path().join("auth.json"));
+                    maybe_import(entry.path().join("auth.json"), true);
                 }
             }
         }
@@ -231,9 +252,55 @@ impl CodexAdapter {
         storage::ensure_exists(src, "stored auth.json")?;
         let home = codex_home();
         let dst = home.join("auth.json");
+        if account.is_subscription()
+            && dst.exists()
+            && let Ok(live) = self.read_auth_json(&dst)
+            && let Ok(stored) = self.read_auth_json(src)
+            && chatgpt_identities_match(&live, &stored)
+            && live_auth_is_newer(&live, &stored)
+        {
+            // live 已是同一账号且更新：吸收到仓库，禁止用过期副本覆盖 live
+            atomic_copy(&dst, src)?;
+            switch_config(&home, account)?;
+            return Ok(());
+        }
         atomic_copy(src, &dst)?;
         switch_config(&home, account)?;
         Ok(())
+    }
+
+    /// refresh 前吸收 live 上更新过的 token，避免用已轮换作废的 refresh_token。
+    pub(super) fn absorb_newer_live_auth(&self, state: &mut State) {
+        let live_path = codex_home().join("auth.json");
+        let Ok(live) = self.read_auth_json(&live_path) else {
+            return;
+        };
+        let Ok(identity) = decode_identity(&live) else {
+            return;
+        };
+        let Some(account) =
+            find_matching_account(state, &identity.email, identity.account_id.as_deref())
+                .filter(|account| account.is_subscription())
+                .cloned()
+        else {
+            return;
+        };
+        let stored_path = Path::new(&account.auth_path);
+        let should_copy = match self.read_auth_json(stored_path) {
+            Ok(stored) => live_auth_is_newer(&live, &stored),
+            Err(_) => true,
+        };
+        if !should_copy {
+            return;
+        }
+        if atomic_copy(&live_path, stored_path).is_ok()
+            && let Some(slot) = state.accounts.iter_mut().find(|item| item.id == account.id)
+        {
+            slot.updated_at = now_ts();
+            if slot.plan.is_none() {
+                slot.plan = identity.plan;
+            }
+        }
     }
 
     pub fn remove_account(&self, state_dir: &Path, state: &mut State, id: &str) -> Result<()> {
@@ -947,6 +1014,185 @@ mod tests {
         );
         assert_eq!(account.api_token_label.as_deref(), Some("sk-abcd-wxyz"));
         assert!(!state.usage_cache.contains_key("legacy-api"));
+        fs::remove_dir_all(&tmp)?;
+        Ok(())
+    }
+
+    fn chatgpt_auth_file(email: &str, access: &str, last_refresh: &str) -> serde_json::Value {
+        serde_json::json!({
+            "last_refresh": last_refresh,
+            "tokens": {
+                "access_token": access,
+                "refresh_token": format!("rt-{access}"),
+                "id_token": fake_jwt(&format!(r#"{{"email":"{email}"}}"#)),
+                "account_id": format!("acct-{email}")
+            }
+        })
+    }
+
+    fn subscription_record(auth_path: &Path, email: &str) -> AccountRecord {
+        AccountRecord {
+            id: "acct-sub".into(),
+            account_type: AccountType::Subscription,
+            email: email.into(),
+            account_id: Some("acct-1".into()),
+            auth_path: auth_path.to_string_lossy().into_owned(),
+            ..AccountRecord::default()
+        }
+    }
+
+    #[test]
+    fn switch_account_absorbs_newer_live_instead_of_overwriting() -> Result<()> {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-switch-newer-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp)?;
+        let stored_home = tmp.join("stored");
+        let live_home = tmp.join("live");
+        fs::create_dir_all(&stored_home)?;
+        fs::create_dir_all(&live_home)?;
+        let stored_auth = stored_home.join("auth.json");
+        let live_auth = live_home.join("auth.json");
+        fs::write(
+            &stored_auth,
+            chatgpt_auth_file("a@example.com", "stored-old", "2026-08-24T07:28:44Z").to_string(),
+        )?;
+        fs::write(
+            &live_auth,
+            chatgpt_auth_file("a@example.com", "live-new", "2026-09-04T01:01:08Z").to_string(),
+        )?;
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        CodexAdapter.switch_account(&subscription_record(&stored_auth, "a@example.com"))?;
+
+        let live: serde_json::Value = serde_json::from_str(&fs::read_to_string(&live_auth)?)?;
+        let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(&stored_auth)?)?;
+        assert_eq!(
+            live.pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("live-new")
+        );
+        assert_eq!(
+            stored
+                .pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("live-new")
+        );
+        fs::remove_dir_all(&tmp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn switch_account_overwrites_live_when_stored_is_newer() -> Result<()> {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-switch-stored-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp)?;
+        let stored_home = tmp.join("stored");
+        let live_home = tmp.join("live");
+        fs::create_dir_all(&stored_home)?;
+        fs::create_dir_all(&live_home)?;
+        let stored_auth = stored_home.join("auth.json");
+        let live_auth = live_home.join("auth.json");
+        fs::write(
+            &stored_auth,
+            chatgpt_auth_file("a@example.com", "stored-new", "2026-09-04T01:01:08Z").to_string(),
+        )?;
+        fs::write(
+            &live_auth,
+            chatgpt_auth_file("a@example.com", "live-old", "2026-08-24T07:28:44Z").to_string(),
+        )?;
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        CodexAdapter.switch_account(&subscription_record(&stored_auth, "a@example.com"))?;
+
+        let live: serde_json::Value = serde_json::from_str(&fs::read_to_string(&live_auth)?)?;
+        assert_eq!(
+            live.pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("stored-new")
+        );
+        fs::remove_dir_all(&tmp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn switch_account_overwrites_live_when_identity_differs() -> Result<()> {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-switch-diff-{}", Uuid::new_v4()));
+        fs::create_dir_all(&tmp)?;
+        let stored_home = tmp.join("stored");
+        let live_home = tmp.join("live");
+        fs::create_dir_all(&stored_home)?;
+        fs::create_dir_all(&live_home)?;
+        let stored_auth = stored_home.join("auth.json");
+        let live_auth = live_home.join("auth.json");
+        fs::write(
+            &stored_auth,
+            chatgpt_auth_file("b@example.com", "stored-b", "2026-08-24T07:28:44Z").to_string(),
+        )?;
+        fs::write(
+            &live_auth,
+            chatgpt_auth_file("a@example.com", "live-a", "2026-09-04T01:01:08Z").to_string(),
+        )?;
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        CodexAdapter.switch_account(&subscription_record(&stored_auth, "b@example.com"))?;
+
+        let live: serde_json::Value = serde_json::from_str(&fs::read_to_string(&live_auth)?)?;
+        assert_eq!(
+            live.pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("stored-b")
+        );
+        fs::remove_dir_all(&tmp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn import_known_does_not_overwrite_newer_stored_auth() -> Result<()> {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-import-newer-{}", Uuid::new_v4()));
+        let state_dir = tmp.join("state");
+        let live_home = tmp.join("live");
+        fs::create_dir_all(&live_home)?;
+        fs::write(
+            live_home.join("auth.json"),
+            chatgpt_auth_file("a@example.com", "live-old", "2026-08-24T07:28:44Z").to_string(),
+        )?;
+
+        let mut state = State::default();
+        let stored_home = state_dir.join("accounts").join("keep");
+        fs::create_dir_all(&stored_home)?;
+        let stored_auth = stored_home.join("auth.json");
+        fs::write(
+            &stored_auth,
+            chatgpt_auth_file("a@example.com", "stored-new", "2026-09-04T01:01:08Z").to_string(),
+        )?;
+        state.accounts.push(AccountRecord {
+            id: "keep".into(),
+            email: "a@example.com".into(),
+            account_id: Some("acct-1".into()),
+            auth_path: stored_auth.to_string_lossy().into_owned(),
+            ..AccountRecord::default()
+        });
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        CodexAdapter.import_known_sources(&state_dir, &mut state);
+
+        let stored: serde_json::Value = serde_json::from_str(&fs::read_to_string(&stored_auth)?)?;
+        assert_eq!(
+            stored
+                .pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("stored-new")
+        );
         fs::remove_dir_all(&tmp)?;
         Ok(())
     }

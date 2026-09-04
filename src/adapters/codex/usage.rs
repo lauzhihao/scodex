@@ -33,6 +33,8 @@ fn http_client() -> &'static Client {
 
 impl CodexAdapter {
     pub fn refresh_all_accounts(&self, state: &mut State) {
+        self.absorb_newer_live_auth(state);
+
         let api_account_ids = state
             .accounts
             .iter()
@@ -80,123 +82,82 @@ impl CodexAdapter {
         let auth_path = Path::new(&account.auth_path);
         let config_path = account.config_path.as_ref().map(PathBuf::from);
         let timestamp = now_ts();
+        let merge_err = |err: String| {
+            merge_usage_with_previous(
+                previous,
+                make_error_snapshot(account.plan.clone(), timestamp, err),
+            )
+        };
 
-        let auth = match self.read_auth_json(auth_path) {
+        let mut auth = match self.read_auth_json(auth_path) {
             Ok(auth) => auth,
-            Err(error) => {
-                return merge_usage_with_previous(
-                    previous,
-                    make_error_snapshot(account.plan.clone(), timestamp, error.to_string()),
-                );
-            }
+            Err(error) => return merge_err(error.to_string()),
         };
-
-        let access_token = auth
-            .pointer("/tokens/access_token")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let account_id = auth
-            .pointer("/tokens/account_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-
-        let access_token = match access_token {
-            Some(token) => token,
-            None => {
-                return merge_usage_with_previous(
-                    previous,
-                    make_error_snapshot(
-                        account.plan.clone(),
-                        timestamp,
-                        "auth.json is missing tokens.access_token".into(),
-                    ),
-                );
-            }
-        };
+        if let Ok(refreshed) = self.refresh_stored_auth_if_needed(auth_path, auth.clone()) {
+            auth = refreshed;
+        }
 
         let url = resolve_usage_url(config_path.as_deref());
-        let mut headers = HeaderMap::new();
-        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-        headers.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
+        let mut retried_after_unauthorized = false;
+        loop {
+            let access_token = auth
+                .pointer("/tokens/access_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            let account_id = auth
+                .pointer("/tokens/account_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
 
-        // auth_header 构造失败直接返回错误，不再静默以空头继续请求
-        let auth_value = format!("Bearer {access_token}");
-        let auth_header = HeaderValue::from_str(&auth_value)
-            .context("invalid access_token contains non-ASCII characters");
-        match auth_header {
-            Ok(value) => {
-                headers.insert(AUTHORIZATION, value);
+            let Some(access_token) = access_token else {
+                return merge_err("auth.json is missing tokens.access_token".into());
+            };
+
+            let response = match get_usage_response(&url, &access_token, account_id.as_deref()) {
+                Ok(response) => response,
+                Err(error) => return merge_err(error),
+            };
+
+            if response.status() == StatusCode::UNAUTHORIZED {
+                if retried_after_unauthorized {
+                    return merge_usage_with_previous(
+                        previous,
+                        make_relogin_snapshot(account.plan.clone(), timestamp),
+                    );
+                }
+                retried_after_unauthorized = true;
+                match self.refresh_stored_auth(auth_path, auth) {
+                    Ok(refreshed) => {
+                        auth = refreshed;
+                        continue;
+                    }
+                    Err(_) => {
+                        return merge_usage_with_previous(
+                            previous,
+                            make_relogin_snapshot(account.plan.clone(), timestamp),
+                        );
+                    }
+                }
             }
-            Err(error) => {
-                return merge_usage_with_previous(
-                    previous,
-                    make_error_snapshot(account.plan.clone(), timestamp, error.to_string()),
-                );
+            if !response.status().is_success() {
+                return merge_err(format!("GET {url} failed: {}", response.status()));
             }
+
+            let payload = match response.json::<Value>() {
+                Ok(value) => value,
+                Err(error) => return merge_err(error.to_string()),
+            };
+
+            let mut normalized = normalize_usage_response(&payload);
+            normalized.last_synced_at = Some(timestamp);
+            normalized.last_sync_error = None;
+            normalized.needs_relogin = false;
+            return normalized;
         }
-
-        if let Some(account_id) = account_id
-            .as_ref()
-            .and_then(|value| HeaderValue::from_str(value).ok())
-        {
-            headers.insert("ChatGPT-Account-Id", account_id);
-        }
-
-        let response = http_client().get(&url).headers(headers).send();
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => {
-                return merge_usage_with_previous(
-                    previous,
-                    make_error_snapshot(account.plan.clone(), timestamp, error.to_string()),
-                );
-            }
-        };
-
-        if response.status() == StatusCode::UNAUTHORIZED {
-            return merge_usage_with_previous(
-                previous,
-                UsageSnapshot {
-                    plan: account.plan.clone(),
-                    last_synced_at: Some(timestamp),
-                    last_sync_error: Some(
-                        "Codex OAuth token expired or invalid. Run `codex login` again.".into(),
-                    ),
-                    needs_relogin: true,
-                    ..UsageSnapshot::default()
-                },
-            );
-        }
-        if !response.status().is_success() {
-            return merge_usage_with_previous(
-                previous,
-                make_error_snapshot(
-                    account.plan.clone(),
-                    timestamp,
-                    format!("GET {url} failed: {}", response.status()),
-                ),
-            );
-        }
-
-        let payload = match response.json::<Value>() {
-            Ok(value) => value,
-            Err(error) => {
-                return merge_usage_with_previous(
-                    previous,
-                    make_error_snapshot(account.plan.clone(), timestamp, error.to_string()),
-                );
-            }
-        };
-
-        let mut normalized = normalize_usage_response(&payload);
-        normalized.last_synced_at = Some(timestamp);
-        normalized.last_sync_error = None;
-        normalized.needs_relogin = false;
-        normalized
     }
 }
 
@@ -208,6 +169,44 @@ fn make_error_snapshot(plan: Option<String>, ts: i64, err: String) -> UsageSnaps
         last_sync_error: Some(err),
         ..UsageSnapshot::default()
     }
+}
+
+fn make_relogin_snapshot(plan: Option<String>, ts: i64) -> UsageSnapshot {
+    UsageSnapshot {
+        plan,
+        last_synced_at: Some(ts),
+        last_sync_error: Some(
+            "Codex OAuth token expired or invalid. Run `codex login` again.".into(),
+        ),
+        needs_relogin: true,
+        ..UsageSnapshot::default()
+    }
+}
+
+fn get_usage_response(
+    url: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> Result<reqwest::blocking::Response, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
+
+    let auth_value = format!("Bearer {access_token}");
+    let auth_header = HeaderValue::from_str(&auth_value)
+        .context("invalid access_token contains non-ASCII characters")
+        .map_err(|error| error.to_string())?;
+    headers.insert(AUTHORIZATION, auth_header);
+
+    if let Some(account_id) = account_id.and_then(|value| HeaderValue::from_str(value).ok()) {
+        headers.insert("ChatGPT-Account-Id", account_id);
+    }
+
+    http_client()
+        .get(url)
+        .headers(headers)
+        .send()
+        .map_err(|error| error.to_string())
 }
 
 fn collect_refreshed_usage<F>(
@@ -898,5 +897,433 @@ mod tests {
                 .unwrap()
                 .contains("non-ASCII")
         );
+    }
+
+    #[test]
+    fn make_relogin_snapshot_marks_needs_relogin_and_clears_quota() {
+        let snap = super::make_relogin_snapshot(Some("Team".into()), 99);
+        assert!(snap.needs_relogin);
+        assert_eq!(
+            snap.last_sync_error.as_deref(),
+            Some("Codex OAuth token expired or invalid. Run `codex login` again.")
+        );
+        assert!(snap.weekly_remaining_percent.is_none());
+        assert!(snap.five_hour_remaining_percent.is_none());
+    }
+
+    fn fake_jwt(payload: &str) -> String {
+        use base64::Engine;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+        format!("{header}.{payload}.sig")
+    }
+
+    fn chatgpt_auth(
+        email: &str,
+        access_payload: &str,
+        refresh: &str,
+        last_refresh: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "last_refresh": last_refresh,
+            "tokens": {
+                "access_token": fake_jwt(access_payload),
+                "refresh_token": refresh,
+                "id_token": fake_jwt(&format!(r#"{{"email":"{email}"}}"#)),
+                "account_id": "acct-1"
+            }
+        })
+    }
+
+    fn spawn_json_server(
+        handler: impl Fn(&str, &str, &[u8]) -> (u16, String) + Send + Sync + 'static,
+    ) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                            if buf.len() > 64 * 1024 {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let header_end = buf
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                    .unwrap_or(buf.len());
+                let header_text = String::from_utf8_lossy(&buf[..header_end.min(buf.len())]);
+                let request_line = header_text.lines().next().unwrap_or_default().to_string();
+                let content_length = header_text
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0usize);
+                let mut body = buf.get(header_end..).unwrap_or(&[]).to_vec();
+                while body.len() < content_length {
+                    match stream.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => body.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+                body.truncate(content_length);
+                let (status, resp_body) = handler(&request_line, &header_text, &body);
+                let reason = match status {
+                    200 => "OK",
+                    401 => "Unauthorized",
+                    _ => "Error",
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+                    resp_body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn usage_ok_body() -> String {
+        serde_json::json!({
+            "plan_type": "team",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10,
+                    "limit_window_seconds": 18000,
+                    "reset_at": "2026-09-04T12:00:00Z"
+                },
+                "secondary_window": {
+                    "used_percent": 20,
+                    "limit_window_seconds": 604800,
+                    "reset_at": "2026-09-10T12:00:00Z"
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn write_account_home(
+        root: &std::path::Path,
+        email: &str,
+        auth: &serde_json::Value,
+    ) -> AccountRecord {
+        let account_id = "acct-sub";
+        let home = root.join("accounts").join(account_id);
+        std::fs::create_dir_all(&home).unwrap();
+        let auth_path = home.join("auth.json");
+        std::fs::write(&auth_path, serde_json::to_vec_pretty(auth).unwrap()).unwrap();
+        AccountRecord {
+            id: account_id.into(),
+            account_type: AccountType::Subscription,
+            email: email.into(),
+            account_id: Some("acct-1".into()),
+            plan: Some("Team".into()),
+            auth_path: auth_path.to_string_lossy().into_owned(),
+            ..AccountRecord::default()
+        }
+    }
+
+    #[test]
+    fn fetch_usage_refreshes_expired_token_then_succeeds() {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-usage-exp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let email = "a@example.com";
+        let account = write_account_home(
+            &tmp,
+            email,
+            &chatgpt_auth(email, r#"{"exp":1}"#, "old-refresh", "2026-08-24T07:28:44Z"),
+        );
+        let live_home = tmp.join("codex-home");
+        std::fs::create_dir_all(&live_home).unwrap();
+        std::fs::copy(&account.auth_path, live_home.join("auth.json")).unwrap();
+
+        let base = spawn_json_server(|request_line, headers, body| {
+            if request_line.starts_with("POST /oauth/token") {
+                let payload: serde_json::Value =
+                    serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+                assert_eq!(
+                    payload
+                        .get("refresh_token")
+                        .and_then(serde_json::Value::as_str),
+                    Some("old-refresh")
+                );
+                return (
+                    200,
+                    serde_json::json!({
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "id_token": fake_jwt(r#"{"email":"a@example.com"}"#)
+                    })
+                    .to_string(),
+                );
+            }
+            if request_line.contains("/wham/usage") {
+                assert!(
+                    headers.to_ascii_lowercase().contains("bearer new-access"),
+                    "{headers}"
+                );
+                return (200, usage_ok_body());
+            }
+            (404, r#"{"error":"missing"}"#.into())
+        });
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        let _usage = EnvGuard::set("CODEX_USAGE_BASE_URL", format!("{base}/backend-api"));
+        let _oauth = EnvGuard::set(
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+            format!("{base}/oauth/token"),
+        );
+
+        let mut state = State {
+            version: 1,
+            accounts: vec![account.clone()],
+            usage_cache: BTreeMap::new(),
+            repo_sync: Default::default(),
+        };
+        CodexAdapter.refresh_all_accounts(&mut state);
+        let usage = state.usage_cache.get(&account.id).unwrap();
+        assert!(!usage.needs_relogin, "{usage:?}");
+        assert!(usage.last_sync_error.is_none(), "{usage:?}");
+        assert_eq!(usage.five_hour_remaining_percent, Some(90));
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account.auth_path).unwrap()).unwrap();
+        assert_eq!(
+            stored
+                .pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("new-access")
+        );
+        let live: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(live_home.join("auth.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            live.pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("new-access")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_usage_retries_after_unauthorized_once() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-usage-401-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let email = "a@example.com";
+        let account = write_account_home(
+            &tmp,
+            email,
+            &chatgpt_auth(
+                email,
+                r#"{"exp":2000000000}"#,
+                "old-refresh",
+                "2026-09-04T01:01:08Z",
+            ),
+        );
+
+        let live_home = tmp.join("codex-home");
+        std::fs::create_dir_all(&live_home).unwrap();
+
+        let usage_hits = Arc::new(Mutex::new(0u32));
+        let usage_hits_clone = Arc::clone(&usage_hits);
+        let base = spawn_json_server(move |request_line, headers, _body| {
+            if request_line.starts_with("POST /oauth/token") {
+                return (
+                    200,
+                    serde_json::json!({
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh"
+                    })
+                    .to_string(),
+                );
+            }
+            if request_line.contains("/wham/usage") {
+                let mut hits = usage_hits_clone.lock().unwrap();
+                *hits += 1;
+                if *hits == 1 {
+                    assert!(headers.to_ascii_lowercase().contains("bearer eyj"));
+                    return (401, r#"{"error":{"code":"token_expired"}}"#.into());
+                }
+                assert!(headers.to_ascii_lowercase().contains("bearer new-access"));
+                return (200, usage_ok_body());
+            }
+            (404, r#"{"error":"missing"}"#.into())
+        });
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        let _usage = EnvGuard::set("CODEX_USAGE_BASE_URL", format!("{base}/backend-api"));
+        let _oauth = EnvGuard::set(
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+            format!("{base}/oauth/token"),
+        );
+
+        let mut state = State {
+            version: 1,
+            accounts: vec![account.clone()],
+            usage_cache: BTreeMap::new(),
+            repo_sync: Default::default(),
+        };
+        CodexAdapter.refresh_all_accounts(&mut state);
+        let usage = state.usage_cache.get(&account.id).unwrap();
+        assert!(!usage.needs_relogin, "{usage:?}");
+        assert_eq!(*usage_hits.lock().unwrap(), 2);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fetch_usage_marks_relogin_when_refresh_fails() {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-usage-fail-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let email = "a@example.com";
+        let account = write_account_home(
+            &tmp,
+            email,
+            &chatgpt_auth(email, r#"{"exp":1}"#, "revoked", "2026-08-24T07:28:44Z"),
+        );
+        let live_home = tmp.join("codex-home");
+        std::fs::create_dir_all(&live_home).unwrap();
+
+        let base = spawn_json_server(|request_line, _, _| {
+            if request_line.starts_with("POST /oauth/token") {
+                return (401, r#"{"error":"invalid_grant"}"#.into());
+            }
+            if request_line.contains("/wham/usage") {
+                return (401, r#"{"error":{"code":"token_expired"}}"#.into());
+            }
+            (404, r#"{"error":"missing"}"#.into())
+        });
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        let _usage = EnvGuard::set("CODEX_USAGE_BASE_URL", format!("{base}/backend-api"));
+        let _oauth = EnvGuard::set(
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+            format!("{base}/oauth/token"),
+        );
+
+        let mut state = State {
+            version: 1,
+            accounts: vec![account.clone()],
+            usage_cache: BTreeMap::from([(
+                account.id.clone(),
+                UsageSnapshot {
+                    weekly_remaining_percent: Some(47),
+                    five_hour_remaining_percent: Some(80),
+                    ..UsageSnapshot::default()
+                },
+            )]),
+            repo_sync: Default::default(),
+        };
+        CodexAdapter.refresh_all_accounts(&mut state);
+        let usage = state.usage_cache.get(&account.id).unwrap();
+        assert!(usage.needs_relogin);
+        assert!(usage.weekly_remaining_percent.is_none());
+        assert!(usage.five_hour_remaining_percent.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_all_accounts_absorbs_newer_live_auth() {
+        use crate::adapters::codex::{EnvGuard, TEST_ENV_LOCK};
+
+        let tmp = std::env::temp_dir().join(format!("scodex-usage-abs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let email = "a@example.com";
+        let stored = chatgpt_auth(
+            email,
+            r#"{"exp":1}"#,
+            "stored-refresh",
+            "2026-08-24T07:28:44Z",
+        );
+        let account = write_account_home(&tmp, email, &stored);
+
+        let live_home = tmp.join("codex-home");
+        std::fs::create_dir_all(&live_home).unwrap();
+        let live = serde_json::json!({
+            "last_refresh": "2026-09-04T01:01:08.861768319Z",
+            "tokens": {
+                "access_token": "live-access",
+                "refresh_token": "live-refresh",
+                "id_token": fake_jwt(r#"{"email":"a@example.com"}"#),
+                "account_id": "acct-1"
+            }
+        });
+        std::fs::write(
+            live_home.join("auth.json"),
+            serde_json::to_vec_pretty(&live).unwrap(),
+        )
+        .unwrap();
+
+        let base = spawn_json_server(|request_line, headers, _| {
+            assert!(
+                !request_line.starts_with("POST /oauth/token"),
+                "absorbed live token should not need oauth"
+            );
+            assert!(headers.to_ascii_lowercase().contains("bearer live-access"));
+            (200, usage_ok_body())
+        });
+
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _codex = EnvGuard::set("CODEX_HOME", &live_home);
+        let _usage = EnvGuard::set("CODEX_USAGE_BASE_URL", format!("{base}/backend-api"));
+
+        let mut state = State {
+            version: 1,
+            accounts: vec![account.clone()],
+            usage_cache: BTreeMap::new(),
+            repo_sync: Default::default(),
+        };
+        CodexAdapter.refresh_all_accounts(&mut state);
+        let usage = state.usage_cache.get(&account.id).unwrap();
+        assert!(!usage.needs_relogin, "{usage:?}");
+        assert_eq!(usage.five_hour_remaining_percent, Some(90));
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&account.auth_path).unwrap()).unwrap();
+        assert_eq!(
+            stored
+                .pointer("/tokens/access_token")
+                .and_then(serde_json::Value::as_str),
+            Some("live-access")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
